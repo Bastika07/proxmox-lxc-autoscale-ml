@@ -51,6 +51,10 @@ scaling:
   cpu_scale_down_threshold: 30  # CPU usage percentage to trigger scale-down
   ram_scale_up_threshold: 75  # RAM usage percentage to trigger scale-up
   ram_scale_down_threshold: 30  # RAM usage percentage to trigger scale-down
+  # Swap as a RAM signal (percent of the container's swap in use). Ignored for
+  # containers without swap and when the monitor runs with enable_swap: false.
+  swap_scale_up_threshold: 20  # Swap usage percentage that triggers a RAM scale-up
+  swap_scale_down_block_threshold: 5  # Swap usage percentage above which RAM is never scaled down
   # Minimum confidence (0-100) required before a scaling action is applied.
   # 0 disables the check. Confidence is the percentile of this sample's distance
   # from the model's decision boundary among the distances seen while training:

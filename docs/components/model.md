@@ -122,12 +122,18 @@ Step size: cpu_scale_step (default 1 core)
 Scale UP if:
   - IsolationForest detects anomaly (-1)
   - RAM usage % > ram_scale_up_threshold (default 75%)
+    OR swap usage % > swap_scale_up_threshold (default 20%)
   - Current RAM < max_ram_mb
 
 Scale DOWN if:
   - IsolationForest reports normal (1)
   - RAM usage % < ram_scale_down_threshold (default 30%)
+  - Swap usage % <= swap_scale_down_block_threshold (default 5%)
   - Current RAM > min_ram_mb
+
+Swap usage % = swap_usage_mb / swap_total_mb. A container with
+swap_total_mb = 0 (no swap, or monitor enable_swap: false) is
+scaled on RAM alone.
 
 Step size: ram_scale_step_mb (default 512 MB)
 ```
