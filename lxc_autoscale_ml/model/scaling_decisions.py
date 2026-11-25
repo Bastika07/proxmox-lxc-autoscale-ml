@@ -42,6 +42,17 @@ def _optional_mb(value):
     return None if math.isnan(number) else int(number)
 
 
+def _optional_percent(value):
+    """A percentage as float, or None when missing or NaN."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(number) else number
+
+
 def determine_swap_limit(latest_metrics, new_ram, config):
     """
     Return the swap limit (MB) to set alongside RAM, or None to leave it alone.
@@ -118,6 +129,9 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
             - memory_usage_mb: Current RAM usage in MB
             - current_cores: Current CPU core allocation
             - current_ram_mb: Current RAM allocation in MB
+            - previous_cpu_usage_percent (optional): the container's sample
+              before this one. CPU only scales up when both are above the
+              threshold; without it a single sample decides, as before.
             - swap_usage_mb / swap_total_mb (optional): swap in use and swap
               available inside the container. A total of 0 means the
               container has no swap (or the monitor runs with
@@ -166,9 +180,20 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
         logging.debug("Anomaly detected. Evaluating for potential scaling based on thresholds.")
 
     # Check threshold-based scaling
+    previous_cpu = _optional_percent(latest_metrics.get("previous_cpu_usage_percent"))
     if cpu_usage > thresholds["cpu_scale_up_threshold"]:
-        cpu_action = "Scale Up"
-        logging.debug(f"CPU usage {cpu_usage}% exceeds the scale-up threshold.")
+        if previous_cpu is not None and previous_cpu <= thresholds["cpu_scale_up_threshold"]:
+            # A single sample above the threshold is a burst, not load. On the
+            # host a job running for about a minute every half hour (container
+            # 106) added a core on its one busy sample, and the next quiet
+            # sample took it away again: 2 -> 3 -> 2 cores within one cycle,
+            # several times a day. Two samples in a row are required instead.
+            logging.debug(
+                f"CPU usage {cpu_usage}% exceeds the scale-up threshold, but the sample before "
+                f"was {previous_cpu:.1f}%: a single busy sample is a burst. Not scaling up.")
+        else:
+            cpu_action = "Scale Up"
+            logging.debug(f"CPU usage {cpu_usage}% exceeds the scale-up threshold.")
     elif cpu_usage < thresholds["cpu_scale_down_threshold"]:
         cpu_action = "Scale Down"
         logging.debug(f"CPU usage {cpu_usage}% is below the scale-down threshold.")

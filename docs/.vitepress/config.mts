@@ -38,7 +38,7 @@ export default defineConfig({
   lastUpdated: true,
   cleanUrls: true,
   // Agent-facing config for the engineering skills, not part of the published site.
-  srcExclude: ['agents/**'],
+  srcExclude: ['agents/**', 'adr/**'],
 
   themeConfig: {
     logo: '/logo.png',

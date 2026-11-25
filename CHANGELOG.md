@@ -34,9 +34,19 @@ them.
   configured outside the limits by hand.
 - The dry-run log line now shows current and target values, RAM and swap in
   use, so a dry run can be checked from the log.
+- **A single busy CPU sample no longer adds a core.** A job running about a
+  minute every half hour pushed one sample over `cpu_scale_up_threshold`; the
+  model added a core and took it away on the next quiet sample (2 -> 3 -> 2
+  cores three times a day on a real host). CPU now scales up only when the
+  sample before is above the threshold too.
 
 ### Added
 
+- Tests that replay a day of real host metrics
+  (`tests/test_host_metrics_replay.py`) and close the decision loop under a
+  steady workload (`tests/test_scaling_stability.py`). Both go red on every
+  fault the real-data dry run found.
+- ruff rejects naive datetimes (`DTZ`) and `pd.Timestamp.now` (banned API).
 - **Swap is now a signal for RAM scaling.** A container can swap hard while its
   RAM usage still looks moderate. RAM is scaled up when swap usage exceeds
   `scaling.swap_scale_up_threshold` (default 20% of the container's swap), and

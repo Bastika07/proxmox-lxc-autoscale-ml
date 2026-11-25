@@ -6,7 +6,7 @@ import time
 
 import pandas as pd
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 # Ensure all modules in the lxc_autoscale_ml directory are accessible
 sys.path.append('/usr/local/bin/lxc_autoscale_ml')
@@ -39,7 +39,7 @@ class CircuitBreaker:
             return False
 
         # Check if timeout has passed
-        if datetime.now() - self.opened_at[key] > timedelta(seconds=self.timeout):
+        if datetime.now(UTC) - self.opened_at[key] > timedelta(seconds=self.timeout):
             logging.info(f"Circuit breaker for {key} timeout expired, attempting reset")
             self.reset(key)
             return False
@@ -50,7 +50,7 @@ class CircuitBreaker:
         """Record a failure and open circuit if threshold reached."""
         self.failures[key] += 1
         if self.failures[key] >= self.failure_threshold:
-            self.opened_at[key] = datetime.now()
+            self.opened_at[key] = datetime.now(UTC)
             logging.warning(
                 f"Circuit breaker opened for {key} after {self.failures[key]} failures. "
                 f"Will retry in {self.timeout}s"
@@ -123,8 +123,11 @@ def metrics_are_stale(df, config):
     max_age = config.get("max_metrics_age_seconds", interval * 3)
     newest = df["timestamp"].max()
     # load_data normalises timestamps to UTC; a naive "now" here raised
-    # "Cannot subtract tz-naive and tz-aware" on every cycle.
-    now = pd.Timestamp.now(tz="UTC") if newest.tzinfo is not None else pd.Timestamp.now()
+    # "Cannot subtract tz-naive and tz-aware" on every cycle. A naive newest
+    # sample is local time, as the old monitor wrote it.
+    now = pd.Timestamp(datetime.now(UTC))
+    if newest.tzinfo is None:
+        now = now.tz_convert(datetime.now().astimezone().tzinfo).tz_localize(None)  # noqa: DTZ005 - local zone only
     age = (now - newest).total_seconds()
     if age > max_age:
         logging.error(
@@ -249,6 +252,10 @@ def evaluate_container(container_id, df, model, features_to_use, container_confi
         return
 
     latest_metrics = container_data.iloc[-1].copy()
+    # determine_scaling_action needs two busy samples in a row before it adds
+    # a core; one is a burst.
+    latest_metrics["previous_cpu_usage_percent"] = (
+        container_data["cpu_usage_percent"].iloc[-2] if len(container_data) > 1 else None)
 
     # Every target this function computes is ABSOLUTE -- `pct set -cores N`,
     # not a delta -- and every one is derived from the container's current

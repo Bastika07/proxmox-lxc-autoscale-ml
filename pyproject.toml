@@ -14,12 +14,21 @@ select = [
     "B",    # flake8-bugbear
     "UP",   # pyupgrade
     "S",    # flake8-bandit
+    "DTZ",  # naive datetimes: the monitor writes aware UTC, naive "now" crashed the model
+    "TID",  # banned APIs, see flake8-tidy-imports below
 ]
 ignore = [
     "E501",    # line length is handled by the formatter, not enforced
     "S101",    # assert is expected in the test suite
     "UP032",   # str.format is used deliberately for the HTML template
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# DTZ does not see pandas. A naive pd.Timestamp.now() against the monitor's
+# aware UTC timestamps raised "Cannot subtract tz-naive and tz-aware" on every
+# cycle on a real host.
+"pandas.Timestamp.now".msg = "Use pd.Timestamp(datetime.now(UTC)); naive local time does not compare with the monitor's UTC timestamps."
+"pandas.Timestamp.utcnow".msg = "Use pd.Timestamp(datetime.now(UTC))."
 
 [tool.ruff.lint.per-file-ignores]
 # Proxmox management inherently shells out to pct/pvesh/pvecm.

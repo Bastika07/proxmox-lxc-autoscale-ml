@@ -123,7 +123,7 @@ class TestTimezones:
 
     def test_naive_rows_from_an_old_monitor_mix_with_aware_ones(self, tmp_path):
         """Old naive rows stay in the file until they age out."""
-        naive_local = datetime(2026, 11, 25, 9, 0, 0)
+        naive_local = datetime(2026, 11, 25, 9, 0, 0)  # noqa: DTZ001 - the old monitor wrote naive local time
         aware = naive_local.astimezone().astimezone(UTC) + timedelta(seconds=60)
         data = [{"104": container_metrics(naive_local.isoformat()), "summary": {}},
                 {"104": container_metrics(aware.isoformat()), "summary": {}}]
@@ -135,8 +135,8 @@ class TestTimezones:
         assert (df["timestamp"].iloc[1] - df["timestamp"].iloc[0]).total_seconds() == 60
 
     def test_staleness_is_measured_on_aware_timestamps(self, orchestrator):
-        fresh = pd.DataFrame({"timestamp": [pd.Timestamp.now(tz="UTC")]})
-        old = pd.DataFrame({"timestamp": [pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=1)]})
+        fresh = pd.DataFrame({"timestamp": [pd.Timestamp(datetime.now(UTC))]})
+        old = pd.DataFrame({"timestamp": [pd.Timestamp(datetime.now(UTC)) - pd.Timedelta(hours=1)]})
         assert orchestrator.metrics_are_stale(fresh, CONFIG) is False
         assert orchestrator.metrics_are_stale(old, CONFIG) is True
 

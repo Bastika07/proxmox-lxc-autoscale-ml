@@ -142,7 +142,7 @@ class TestModelConfigIsHonoured:
 
     def test_every_key_is_read(self, tmp_path, monkeypatch):
         import json
-        from datetime import datetime, timedelta
+        from datetime import UTC, datetime, timedelta
 
         import lxc_autoscale_ml as orch
 
@@ -152,7 +152,7 @@ class TestModelConfigIsHonoured:
 
         metrics = []
         for i in range(8):
-            stamp = (datetime.now() - timedelta(seconds=60 * (7 - i))).isoformat()
+            stamp = (datetime.now(UTC) - timedelta(seconds=60 * (7 - i))).isoformat()
             metrics.append({"104": {
                 "timestamp": stamp, "cpu_usage_percent": 99.0,
                 "memory_usage_mb": 7900.0 + i, "swap_usage_mb": 0, "swap_total_mb": 0,
@@ -189,7 +189,7 @@ class TestModelConfigIsHonoured:
         # them. One-sided fixture data is why they looked unread.
         idle = []
         for i in range(8):
-            stamp = (datetime.now() - timedelta(seconds=60 * (7 - i))).isoformat()
+            stamp = (datetime.now(UTC) - timedelta(seconds=60 * (7 - i))).isoformat()
             idle.append({"104": {
                 "timestamp": stamp, "cpu_usage_percent": 3.0,
                 "memory_usage_mb": 100.0 + i, "swap_usage_mb": 0, "swap_total_mb": 0,
@@ -292,7 +292,7 @@ class TestSwapDrivesRamScaling:
     def test_a_swapping_container_is_scaled_up_through_a_full_cycle(self, tmp_path, monkeypatch):
         """End to end: metrics file -> run_cycle -> the RAM call apply_scaling makes."""
         import json
-        from datetime import datetime, timedelta
+        from datetime import UTC, datetime, timedelta
 
         import lxc_autoscale_ml as orch
         import scaling_decisions
@@ -301,7 +301,7 @@ class TestSwapDrivesRamScaling:
         raw["log_file"] = str(tmp_path / "model.log")
         metrics = []
         for i in range(8):
-            stamp = (datetime.now() - timedelta(seconds=60 * (7 - i))).isoformat()
+            stamp = (datetime.now(UTC) - timedelta(seconds=60 * (7 - i))).isoformat()
             metrics.append({"104": {
                 "timestamp": stamp, "cpu_usage_percent": 50.0,
                 "memory_usage_mb": 2048.0 + i, "swap_usage_mb": 1100.0 + i,

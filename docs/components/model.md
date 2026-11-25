@@ -105,7 +105,7 @@ Resources scale gradually to avoid instability.
 ```
 Scale UP if:
   - IsolationForest detects anomaly (-1)
-  - CPU usage > cpu_scale_up_threshold (default 75%)
+  - CPU usage > cpu_scale_up_threshold (default 75%) in this sample and the one before it; a single busy sample is a burst and adds no core
   - Current cores < max_cpu_cores
 
 Scale DOWN if:
