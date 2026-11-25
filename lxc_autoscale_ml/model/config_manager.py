@@ -79,7 +79,8 @@ def validate_scaling_config(config):
 
     # Validate thresholds are percentages (0-100) and numeric
     threshold_keys = ['cpu_scale_up_threshold', 'cpu_scale_down_threshold',
-                     'ram_scale_up_threshold', 'ram_scale_down_threshold']
+                     'ram_scale_up_threshold', 'ram_scale_down_threshold',
+                     'swap_scale_up_threshold', 'swap_scale_down_threshold']
 
     for key in threshold_keys:
         if key in scaling:
@@ -97,6 +98,12 @@ def validate_scaling_config(config):
     if (scaling.get('ram_scale_down_threshold', 0) >=
         scaling.get('ram_scale_up_threshold', 100)):
         raise ConfigError("ram_scale_down_threshold must be less than ram_scale_up_threshold")
+
+    # The defaults mirror scaling_decisions; an inverted pair would block every
+    # RAM scale-down while letting swap trigger scale-ups below that same level.
+    if (scaling.get('swap_scale_down_threshold', 10) >=
+        scaling.get('swap_scale_up_threshold', 50)):
+        raise ConfigError("swap_scale_down_threshold must be less than swap_scale_up_threshold")
 
     # Validate step sizes are positive
     if scaling.get('cpu_scale_step', 1) <= 0:

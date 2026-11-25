@@ -55,12 +55,13 @@ IsolationForest is an unsupervised machine learning algorithm for anomaly detect
 | -1 | Anomaly (unusual resource usage) |
 | 1 | Normal behavior |
 
-### Features Used (26 total)
+### Features Used (32 total)
 
 | Category | Features |
 |----------|----------|
 | CPU | `cpu_usage_percent`, `rolling_mean_cpu`, `rolling_std_cpu`, `cpu_trend`, `max_cpu`, `min_cpu`, `cpu_per_process` |
-| Memory | `memory_usage_mb`, `rolling_mean_memory`, `rolling_std_memory`, `memory_trend`, `max_memory`, `min_memory`, `memory_per_process`, `swap_usage_mb`, `swap_total_mb` |
+| Memory | `memory_usage_mb`, `rolling_mean_memory`, `rolling_std_memory`, `memory_trend`, `max_memory`, `min_memory`, `memory_per_process` |
+| Swap | `swap_usage_mb`, `swap_total_mb`, `swap_usage_percent`, `rolling_mean_swap`, `rolling_std_swap`, `swap_trend`, `swap_growth_mb`, `max_swap` |
 | Combined | `cpu_memory_ratio` |
 | Disk | `filesystem_usage_gb`, `filesystem_free_gb`, `filesystem_total_gb` |
 | Network | `network_rx_bytes`, `network_tx_bytes` |
@@ -105,11 +106,13 @@ Step size: cpu_scale_step (default 1 core)
 Scale UP if:
   - IsolationForest detects anomaly (-1)
   - RAM usage % > ram_scale_up_threshold (default 75%)
+    OR swap usage % > swap_scale_up_threshold (default 50%) and swap is still growing
   - Current RAM < max_ram_mb
 
 Scale DOWN if:
   - IsolationForest reports normal (1)
   - RAM usage % < ram_scale_down_threshold (default 30%)
+  - Swap usage % < swap_scale_down_threshold (default 10%) and swap is not growing
   - Current RAM > min_ram_mb
 
 Step size: ram_scale_step_mb (default 512 MB)
@@ -128,6 +131,10 @@ scaling:
   ram_scale_up_threshold: 80
   ram_scale_down_threshold: 40
   ram_scale_step_mb: 512
+
+  # Swap (percent of the container's swap limit)
+  swap_scale_up_threshold: 50
+  swap_scale_down_threshold: 10
 
   # Limits
   min_cpu_cores: 1

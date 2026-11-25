@@ -218,6 +218,14 @@ scaling:
   cpu_scale_down_threshold: 30  # CPU usage percentage to trigger scale-down
   ram_scale_up_threshold: 75  # RAM usage percentage to trigger scale-up
   ram_scale_down_threshold: 30  # RAM usage percentage to trigger scale-down
+  # Swap, as a percentage of the container's swap limit. RAM is scaled up when
+  # swap usage is above swap_scale_up_threshold AND still growing (stale swap
+  # left by an old spike does not count), and RAM is never scaled down while
+  # swap usage is at or above swap_scale_down_threshold or still growing.
+  # Both rules are inert for containers without swap or with the monitor's
+  # enable_swap set to false.
+  swap_scale_up_threshold: 50
+  swap_scale_down_threshold: 10
   # Minimum confidence (0-100) required before a scaling action is applied.
   # 0 disables the check. Confidence is the percentile of this sample's distance
   # from the model's decision boundary among the distances seen while training:
@@ -412,6 +420,8 @@ state. Gunicorn logs a warning at startup if `workers` is above 1.
 | `scaling.cpu_scale_down_threshold` | integer | `30` | CPU % below which to scale down |
 | `scaling.ram_scale_up_threshold` | integer | `75` | RAM % above which to scale up |
 | `scaling.ram_scale_down_threshold` | integer | `30` | RAM % below which to scale down |
+| `scaling.swap_scale_up_threshold` | integer | `50` | Swap % (of the container's swap limit) above which RAM is scaled up, provided swap is still growing |
+| `scaling.swap_scale_down_threshold` | integer | `10` | RAM is not scaled down while swap % is at or above this, or while swap is growing |
 | `scaling.min_confidence` | integer | `0` | Confidence (0-100) required before acting; 0 disables the check |
 | `scaling.dry_run` | boolean | `false` | Log decisions without calling the API |
 | `circuit_breaker.enabled` | boolean | `true` | Stop calling the API for a container after repeated failures |
@@ -466,6 +476,7 @@ contradictory one:
 | A threshold is outside 0-100 | `<key> must be between 0 and 100, got <value>` |
 | `cpu_scale_down_threshold >= cpu_scale_up_threshold` | `cpu_scale_down_threshold must be less than cpu_scale_up_threshold` |
 | `ram_scale_down_threshold >= ram_scale_up_threshold` | `ram_scale_down_threshold must be less than ram_scale_up_threshold` |
+| `swap_scale_down_threshold >= swap_scale_up_threshold` | `swap_scale_down_threshold must be less than swap_scale_up_threshold` |
 | A step size is zero or negative | `<key> must be positive` |
 
 `log_file`, `interval_seconds`, `api` and `api.api_url` are required; the rest

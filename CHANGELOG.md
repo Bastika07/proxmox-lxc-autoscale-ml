@@ -5,6 +5,24 @@ All notable changes to the LXC AutoScale ML project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Swap-aware RAM scaling.** Swap was collected by the monitor but ignored by
+  every scaling decision, so a container that had already started swapping
+  looked comfortable (MemAvailable recovers once pages are pushed out) and was
+  never given more RAM -- or was even scaled down. RAM is now scaled up when
+  swap usage exceeds `scaling.swap_scale_up_threshold` (default 50% of the
+  container's swap limit) **and is still growing**, and RAM is not scaled down
+  while swap usage is at or above `scaling.swap_scale_down_threshold`
+  (default 10%) or growing. Requiring growth keeps stale swap left by an old
+  spike from ratcheting RAM to `max_ram_mb`. Both rules are inert for
+  containers without swap or with `monitoring.enable_swap: false`.
+- Swap features for the IsolationForest: `swap_usage_percent`,
+  `rolling_mean_swap`, `rolling_std_swap`, `swap_trend`, `swap_growth_mb` and
+  `max_swap`.
+
 ## [1.4.0] - 2026-08-18
 
 ### Upgrade notes

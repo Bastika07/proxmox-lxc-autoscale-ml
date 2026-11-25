@@ -124,14 +124,36 @@ def preprocess_data(df, config):
         df['rolling_std_memory'] = df.groupby('container_id')['memory_usage_mb'].transform(
             lambda x: x.rolling(window=rolling_window_size, min_periods=1).std()).fillna(0)
 
+        # Swap features. A container that swaps is short on RAM even when its
+        # RAM percentage looks moderate, because the kernel has already pushed
+        # pages out. Expressed as a share of the container's swap limit so it
+        # is comparable across containers; 0 when the container has no swap or
+        # the monitor has swap collection disabled (it then reports 0/0).
+        df['swap_usage_percent'] = _safe_ratio(df['swap_usage_mb'], df['swap_total_mb']) * 100
+        df['rolling_mean_swap'] = df.groupby('container_id')['swap_usage_mb'].transform(
+            lambda x: x.rolling(window=rolling_window_size, min_periods=1).mean())
+        df['rolling_std_swap'] = df.groupby('container_id')['swap_usage_mb'].transform(
+            lambda x: x.rolling(window=rolling_window_size, min_periods=1).std()).fillna(0)
+        df['max_swap'] = df.groupby('container_id')['swap_usage_mb'].transform(
+            lambda x: x.rolling(window=rolling_window_size, min_periods=1).max())
+        # Average change in swap per sample over the recent window. Swapped-out
+        # pages stay in swap long after the pressure that put them there is
+        # gone, so the level alone cannot tell "swapping now" from "swapped
+        # once, hours ago". Growth can, and the scaling decision relies on it.
+        df['swap_growth_mb'] = df.groupby('container_id')['swap_usage_mb'].transform(
+            lambda x: x.diff().fillna(0).rolling(window=rolling_window_size, min_periods=1).mean())
+
         # Spike detection
         df['cpu_spike'] = np.abs(df['cpu_usage_percent'] - df['rolling_mean_cpu']) > (spike_threshold * df['rolling_std_cpu'])
         df['memory_spike'] = np.abs(df['memory_usage_mb'] - df['rolling_mean_memory']) > (spike_threshold * df['rolling_std_memory'])
+        df['swap_spike'] = np.abs(df['swap_usage_mb'] - df['rolling_mean_swap']) > (spike_threshold * df['rolling_std_swap'])
 
         # Trend detection using the slope of the rolling window
         df['cpu_trend'] = df.groupby('container_id')['cpu_usage_percent'].transform(
             lambda x: _rolling_trend(x, rolling_window_size))
         df['memory_trend'] = df.groupby('container_id')['memory_usage_mb'].transform(
+            lambda x: _rolling_trend(x, rolling_window_size))
+        df['swap_trend'] = df.groupby('container_id')['swap_usage_mb'].transform(
             lambda x: _rolling_trend(x, rolling_window_size))
 
         # Aggregated features

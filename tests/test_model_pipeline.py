@@ -419,6 +419,102 @@ class TestScalingDecisions:
         assert ram_action in ("Scale Up", "Scale Down", "No Scaling")
 
 
+
+class TestSwapAwareness:
+    """Swap is the RAM-pressure signal RAM percentage alone misses: once the
+    kernel pushes pages out, MemAvailable recovers and the container looks
+    comfortable while it thrashes."""
+
+    @staticmethod
+    def decide(**overrides):
+        from scaling_decisions import determine_scaling_action
+
+        metrics = pd.Series({
+            "cpu_usage_percent": 50.0, "memory_usage_mb": 4096.0,  # 50% of 8192
+            "current_cores": 4, "current_ram_mb": 8192,
+            "swap_usage_mb": 0.0, "swap_total_mb": 1024.0, "swap_growth_mb": 0.0,
+            **overrides,
+        })
+        _, ram_action, _, new_ram = determine_scaling_action(metrics, 1, 90.0, BASE_CONFIG)
+        return ram_action, new_ram
+
+    def test_growing_swap_scales_ram_up(self):
+        assert self.decide(swap_usage_mb=800.0, swap_growth_mb=20.0) == ("Scale Up", 8704)
+
+    def test_stale_swap_does_not_scale_ram_up(self):
+        """Pages left in swap by an old spike must not ratchet RAM to the cap."""
+        assert self.decide(swap_usage_mb=800.0, swap_growth_mb=0.0) == ("No Scaling", None)
+
+    def test_swap_below_the_threshold_does_not_scale_up(self):
+        assert self.decide(swap_usage_mb=100.0, swap_growth_mb=5.0) == ("No Scaling", None)
+
+    def test_swap_blocks_ram_scale_down(self):
+        assert self.decide(memory_usage_mb=100.0, swap_usage_mb=300.0) == ("No Scaling", None)
+
+    def test_growing_swap_blocks_ram_scale_down(self):
+        assert self.decide(memory_usage_mb=100.0, swap_usage_mb=10.0,
+                           swap_growth_mb=2.0) == ("No Scaling", None)
+
+    def test_negligible_swap_allows_scale_down(self):
+        assert self.decide(memory_usage_mb=100.0, swap_usage_mb=10.0) == ("Scale Down", 7680)
+
+    def test_no_swap_configured_changes_nothing(self):
+        """swap_total_mb 0 is also what the monitor reports with enable_swap off."""
+        assert self.decide(memory_usage_mb=100.0, swap_usage_mb=0.0,
+                           swap_total_mb=0.0) == ("Scale Down", 7680)
+
+    def test_thresholds_come_from_the_config(self):
+        from scaling_decisions import determine_scaling_action
+
+        config = {**BASE_CONFIG, "scaling": {**BASE_CONFIG["scaling"],
+                                             "swap_scale_up_threshold": 5}}
+        metrics = pd.Series({
+            "cpu_usage_percent": 50.0, "memory_usage_mb": 4096.0,
+            "current_cores": 4, "current_ram_mb": 8192,
+            "swap_usage_mb": 100.0, "swap_total_mb": 1024.0, "swap_growth_mb": 5.0,
+        })
+        _, ram_action, _, _ = determine_scaling_action(metrics, 1, 90.0, config)
+        assert ram_action == "Scale Up"
+
+    def test_preprocessing_derives_swap_features(self, tmp_path):
+        data = [make_snapshot(("104",), i, swap_usage_mb=100.0 * i, swap_total_mb=1024.0)
+                for i in range(8)]
+        path = tmp_path / "metrics.json"
+        path.write_text(json.dumps(data))
+        df = preprocess_data(load_data(str(path)), BASE_CONFIG)
+        latest = df.iloc[-1]
+        assert latest["swap_usage_percent"] == pytest.approx(700.0 / 1024 * 100)
+        assert latest["swap_growth_mb"] == pytest.approx(100.0)
+        assert latest["max_swap"] == pytest.approx(700.0)
+        assert latest["swap_trend"] > 0
+
+    def test_swap_features_reach_the_model(self, metrics_file):
+        df = preprocess_data(load_data(metrics_file()), BASE_CONFIG)
+        _, features = train_anomaly_models(df, BASE_CONFIG)
+        for column in ["swap_usage_percent", "rolling_mean_swap", "swap_growth_mb", "swap_trend"]:
+            assert column in features
+
+    def test_a_cycle_scales_up_a_container_that_starts_swapping(self, tmp_path, monkeypatch):
+        """End to end: RAM at 50%, swap climbing past half its limit."""
+        import lxc_autoscale_ml as orch
+
+        data = [make_snapshot(("104",), i, cpu_usage_percent=50.0,
+                              memory_usage_mb=2048.0, swap_total_mb=1024.0,
+                              swap_usage_mb=100.0 * i)
+                for i in range(8)]
+        path = tmp_path / "metrics.json"
+        path.write_text(json.dumps(data))
+        config = {**BASE_CONFIG, "data_file": str(path)}
+
+        applied = []
+        monkeypatch.setattr(orch, "fetch_container_configs_sync", lambda ids, url, **kw: {
+            c: {"cores": 4, "memory_mb": 4096} for c in ids})
+        monkeypatch.setattr(orch, "apply_scaling", lambda lxc_id, cores, ram, cfg:
+                            applied.append((lxc_id, cores, ram)))
+        assert orch.run_cycle(config) is True
+        assert applied == [("104", None, 4608)]
+
+
 class TestScalingDirectionEndToEnd:
     """The regression that two repair rounds walked past.
 
@@ -605,3 +701,23 @@ class TestStaleAndDepartedContainers:
         path.write_text(json.dumps(data))
         config = {**BASE_CONFIG, "data_file": str(path)}
         assert orchestrator.run_cycle(config) is True
+
+
+class TestSwapThresholdValidation:
+    @staticmethod
+    def validate(**scaling):
+        from config_manager import validate_scaling_config
+        validate_scaling_config({**BASE_CONFIG, "scaling": {**BASE_CONFIG["scaling"], **scaling}})
+
+    def test_shipped_defaults_are_valid(self):
+        self.validate(swap_scale_up_threshold=50, swap_scale_down_threshold=10)
+
+    def test_inverted_pair_is_rejected(self):
+        from config_manager import ConfigError
+        with pytest.raises(ConfigError, match="swap_scale_down_threshold must be less"):
+            self.validate(swap_scale_up_threshold=10, swap_scale_down_threshold=20)
+
+    def test_out_of_range_is_rejected(self):
+        from config_manager import ConfigError
+        with pytest.raises(ConfigError, match="swap_scale_up_threshold must be between"):
+            self.validate(swap_scale_up_threshold=150)
