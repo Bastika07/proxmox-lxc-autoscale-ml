@@ -218,6 +218,10 @@ scaling:
   cpu_scale_down_threshold: 30  # CPU usage percentage to trigger scale-down
   ram_scale_up_threshold: 75  # RAM usage percentage to trigger scale-up
   ram_scale_down_threshold: 30  # RAM usage percentage to trigger scale-down
+  # Swap as a RAM signal (percent of the container's swap in use). Ignored for
+  # containers without swap and when the monitor runs with enable_swap: false.
+  swap_scale_up_threshold: 20  # Swap usage percentage that triggers a RAM scale-up
+  swap_scale_down_block_threshold: 5  # Swap usage percentage above which RAM is never scaled down
   # Minimum confidence (0-100) required before a scaling action is applied.
   # 0 disables the check. Confidence is the percentile of this sample's distance
   # from the model's decision boundary among the distances seen while training:
@@ -412,12 +416,21 @@ state. Gunicorn logs a warning at startup if `workers` is above 1.
 | `scaling.cpu_scale_down_threshold` | integer | `30` | CPU % below which to scale down |
 | `scaling.ram_scale_up_threshold` | integer | `75` | RAM % above which to scale up |
 | `scaling.ram_scale_down_threshold` | integer | `30` | RAM % below which to scale down |
+| `scaling.swap_scale_up_threshold` | integer | `20` | Swap % (of the container's swap) above which RAM is scaled up, even if RAM usage looks moderate |
+| `scaling.swap_scale_down_block_threshold` | integer | `5` | Swap % above which RAM is never scaled down. Must not exceed `swap_scale_up_threshold` |
 | `scaling.min_confidence` | integer | `0` | Confidence (0-100) required before acting; 0 disables the check |
 | `scaling.dry_run` | boolean | `false` | Log decisions without calling the API |
 | `circuit_breaker.enabled` | boolean | `true` | Stop calling the API for a container after repeated failures |
 | `circuit_breaker.failure_threshold` | integer | `3` | Consecutive failures before the circuit opens |
 | `circuit_breaker.timeout_seconds` | integer | `1800` | How long it stays open. Must exceed `interval_seconds`: the breaker is consulted once per container per cycle, so a shorter window has always expired by then and blocks nothing. The model warns at startup if it does not. |
 | `ignore_lxc` | list | `[]` | Container IDs to skip. Matched as strings, so `[101]` and `["101"]` both work. |
+
+On swap: a container can swap hard while its RAM usage still looks moderate,
+because the kernel moves pages out well before `MemAvailable` reaches zero.
+Swap usage is `swap_usage_mb / swap_total_mb` as reported by the monitor. A
+container whose `swap_total_mb` is 0 has no swap signal -- either it has no
+swap, or the monitor runs with `monitoring.enable_swap: false` -- and is scaled
+on RAM alone.
 
 On confidence: it is the **percentile** of this sample's distance from the
 model's decision boundary among the distances seen while training. 90 means
@@ -466,6 +479,7 @@ contradictory one:
 | A threshold is outside 0-100 | `<key> must be between 0 and 100, got <value>` |
 | `cpu_scale_down_threshold >= cpu_scale_up_threshold` | `cpu_scale_down_threshold must be less than cpu_scale_up_threshold` |
 | `ram_scale_down_threshold >= ram_scale_up_threshold` | `ram_scale_down_threshold must be less than ram_scale_up_threshold` |
+| `swap_scale_down_block_threshold > swap_scale_up_threshold` | `swap_scale_down_block_threshold must not be greater than swap_scale_up_threshold` |
 | A step size is zero or negative | `<key> must be positive` |
 
 `log_file`, `interval_seconds`, `api` and `api.api_url` are required; the rest

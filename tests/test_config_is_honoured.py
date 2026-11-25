@@ -213,3 +213,144 @@ class TestModelConfigIsHonoured:
         assert not unread, (
             f"lxc_autoscale_ml.yaml ships keys a full cycle never reads: {unread}"
         )
+
+
+class TestSwapDrivesRamScaling:
+    """`swap_scale_up_threshold` and `swap_scale_down_block_threshold` must
+    change the RAM decision, not merely be read. Swap is reported as
+    swap_usage_mb / swap_total_mb; swap_total_mb == 0 means "no swap" (the
+    monitor reports exactly that for enable_swap: false) and must leave the
+    RAM-only behaviour untouched."""
+
+    @staticmethod
+    def config(**overrides):
+        scaling = dict(shipped("lxc_autoscale_ml.yaml")["scaling"])
+        scaling.update(overrides)
+        return {"scaling": scaling}
+
+    @staticmethod
+    def decide(config, memory_usage_mb, swap_usage_mb, swap_total_mb, current_ram_mb=4096):
+        import pandas as pd
+        from scaling_decisions import determine_scaling_action
+
+        metrics = pd.Series({
+            "cpu_usage_percent": 50.0, "memory_usage_mb": memory_usage_mb,
+            "swap_usage_mb": swap_usage_mb, "swap_total_mb": swap_total_mb,
+            "current_cores": 3, "current_ram_mb": current_ram_mb,
+        })
+        _, ram_action, _, new_ram = determine_scaling_action(metrics, 1, 90.0, config)
+        return ram_action, new_ram
+
+    def test_heavy_swap_scales_ram_up_although_ram_looks_moderate(self):
+        # 50% RAM is between the shipped 30/75 thresholds: RAM alone says nothing.
+        config = self.config()
+        assert self.decide(config, 2048, 0, 1024) == ("No Scaling", None)
+        assert self.decide(config, 2048, 512, 1024) == ("Scale Up", 4096 + 512)
+
+    def test_the_scale_up_threshold_is_the_configured_one(self):
+        # 30% of swap in use: above the shipped 20, below a configured 40.
+        assert self.decide(self.config(), 2048, 307, 1024)[0] == "Scale Up"
+        assert self.decide(self.config(swap_scale_up_threshold=40),
+                           2048, 307, 1024)[0] == "No Scaling"
+
+    def test_swapping_blocks_ram_scale_down(self):
+        # 10% RAM would scale down; 10% swap in use is above the block level.
+        config = self.config()
+        assert self.decide(config, 409, 0, 1024) == ("Scale Down", 4096 - 512)
+        assert self.decide(config, 409, 102, 1024) == ("No Scaling", None)
+
+    def test_the_block_threshold_is_the_configured_one(self):
+        # 3% swap: below the shipped block level of 5, above a configured 1.
+        assert self.decide(self.config(), 409, 31, 1024)[0] == "Scale Down"
+        assert self.decide(self.config(swap_scale_down_block_threshold=1),
+                           409, 31, 1024)[0] == "No Scaling"
+
+    def test_no_swap_means_ram_only_behaviour(self):
+        # swap_total_mb == 0: a nonzero usage figure (stale or bogus) is ignored.
+        config = self.config()
+        assert self.decide(config, 409, 999, 0) == ("Scale Down", 4096 - 512)
+        assert self.decide(config, 2048, 999, 0) == ("No Scaling", None)
+
+    def test_metrics_without_swap_fields_still_scale(self):
+        import pandas as pd
+        from scaling_decisions import determine_scaling_action
+
+        metrics = pd.Series({
+            "cpu_usage_percent": 50.0, "memory_usage_mb": 409.0,
+            "current_cores": 3, "current_ram_mb": 4096,
+        })
+        assert determine_scaling_action(metrics, 1, 90.0, self.config())[1] == "Scale Down"
+
+    def test_swap_scale_up_respects_the_ram_ceiling(self):
+        config = self.config()
+        ceiling = config["scaling"]["max_ram_mb"]
+        assert self.decide(config, ceiling // 2, 900, 1024,
+                           current_ram_mb=ceiling) == ("No Scaling", None)
+
+    def test_a_swapping_container_is_scaled_up_through_a_full_cycle(self, tmp_path, monkeypatch):
+        """End to end: metrics file -> run_cycle -> the RAM call apply_scaling makes."""
+        import json
+        from datetime import datetime, timedelta
+
+        import lxc_autoscale_ml as orch
+        import scaling_decisions
+
+        raw = shipped("lxc_autoscale_ml.yaml")
+        raw["log_file"] = str(tmp_path / "model.log")
+        metrics = []
+        for i in range(8):
+            stamp = (datetime.now() - timedelta(seconds=60 * (7 - i))).isoformat()
+            metrics.append({"104": {
+                "timestamp": stamp, "cpu_usage_percent": 50.0,
+                "memory_usage_mb": 2048.0 + i, "swap_usage_mb": 600.0 + i,
+                "swap_total_mb": 1024.0, "process_count": 20 + i,
+                "io_stats": {"reads": i, "writes": i},
+                "network_usage": {"rx_bytes": i, "tx_bytes": i},
+                "filesystem_usage_gb": 2.0, "filesystem_total_gb": 8.0,
+                "filesystem_free_gb": 6.0}, "summary": {}})
+        data_file = tmp_path / "metrics.json"
+        data_file.write_text(json.dumps(metrics))
+        raw["data_file"] = str(data_file)
+
+        monkeypatch.setattr(orch, "fetch_container_configs_sync",
+                            lambda ids, url, **kw: {c: {"cores": 3, "memory_mb": 4096}
+                                                    for c in ids})
+        posted = []
+
+        class FakeResponse:
+            status_code = 200
+            def raise_for_status(self): pass
+
+        monkeypatch.setattr(scaling_decisions.requests, "post",
+                            lambda url, **kw: (posted.append((url, kw)), FakeResponse())[1])
+
+        orch.build_circuit_breaker(raw)
+        assert orch.run_cycle(raw) is True
+        ram_calls = [kw["json"] for url, kw in posted if url.endswith("/scale/ram")]
+        assert ram_calls == [{"lxc_id": "104", "vm_id": "104", "memory": 4096 + 512}]
+
+
+class TestSwapThresholdValidation:
+    def test_thresholds_must_be_percentages(self):
+        import pytest
+        from config_manager import ConfigError, validate_scaling_config
+
+        for key in ("swap_scale_up_threshold", "swap_scale_down_block_threshold"):
+            scaling = dict(shipped("lxc_autoscale_ml.yaml")["scaling"])
+            scaling[key] = 150
+            with pytest.raises(ConfigError, match=key):
+                validate_scaling_config({"scaling": scaling})
+
+    def test_block_threshold_cannot_exceed_scale_up_threshold(self):
+        import pytest
+        from config_manager import ConfigError, validate_scaling_config
+
+        scaling = dict(shipped("lxc_autoscale_ml.yaml")["scaling"])
+        scaling.update(swap_scale_up_threshold=10, swap_scale_down_block_threshold=15)
+        with pytest.raises(ConfigError, match="swap_scale_down_block_threshold"):
+            validate_scaling_config({"scaling": scaling})
+
+    def test_shipped_values_are_valid(self):
+        from config_manager import validate_scaling_config
+
+        validate_scaling_config({"scaling": shipped("lxc_autoscale_ml.yaml")["scaling"]})
