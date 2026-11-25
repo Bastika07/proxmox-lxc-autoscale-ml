@@ -1,7 +1,25 @@
 import logging
+import math
 import time
 
 import requests
+
+
+def _swap_usage_percent(latest_metrics):
+    """Swap in use as a percentage of swap available, or None without swap.
+
+    swap_total_mb == 0 is what the monitor reports for a container without
+    swap and for enable_swap: false alike; both mean "no swap signal", not
+    "0% used". Missing or NaN values (older metrics files) mean the same.
+    """
+    try:
+        total = float(latest_metrics.get("swap_total_mb", 0) or 0)
+        used = float(latest_metrics.get("swap_usage_mb", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(total) or math.isnan(used) or total <= 0:
+        return None
+    return max(0.0, min(100.0, used / total * 100))
 
 
 def determine_scaling_action(latest_metrics, scaling_decision, confidence, config):
@@ -18,6 +36,10 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
             - memory_usage_mb: Current RAM usage in MB
             - current_cores: Current CPU core allocation
             - current_ram_mb: Current RAM allocation in MB
+            - swap_usage_mb / swap_total_mb (optional): swap in use and swap
+              available inside the container. A total of 0 means the
+              container has no swap (or the monitor runs with
+              enable_swap: false) and swap is ignored.
         scaling_decision (int): IsolationForest prediction (-1=anomaly, 1=normal)
         confidence (float): Prediction confidence percentage (0-100)
         config (dict): Configuration containing 'scaling' section with thresholds
@@ -41,9 +63,20 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
     # Calculate RAM usage as percentage for threshold comparison
     memory_usage_percent = (memory_usage_mb / current_ram_mb) * 100 if current_ram_mb > 0 else 0
 
-    logging.debug(f"CPU usage: {cpu_usage}% | Memory usage: {memory_usage_mb}MB ({memory_usage_percent:.1f}%) | Confidence: {confidence}%")
-
     thresholds = config["scaling"]
+
+    # Swap is the signal RAM usage alone misses: the kernel pushes pages out
+    # well before MemAvailable reaches zero, so a container can sit at 60% RAM
+    # while swapping hard. Read both thresholds unconditionally so they are
+    # honoured (and visible as read) whether or not this container has swap.
+    swap_scale_up_threshold = thresholds.get("swap_scale_up_threshold", 20)
+    swap_block_threshold = thresholds.get("swap_scale_down_block_threshold", 5)
+    swap_usage_percent = _swap_usage_percent(latest_metrics)
+
+    logging.debug(
+        f"CPU usage: {cpu_usage}% | Memory usage: {memory_usage_mb}MB ({memory_usage_percent:.1f}%) | "
+        f"Swap usage: {'n/a' if swap_usage_percent is None else f'{swap_usage_percent:.1f}%'} | "
+        f"Confidence: {confidence}%")
 
     # IsolationForest returns -1 for anomalies (outliers), 1 for normal points
     # Anomalies (-1) indicate unusual resource patterns that may need scaling
@@ -61,9 +94,22 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
     if memory_usage_percent > thresholds["ram_scale_up_threshold"]:
         ram_action = "Scale Up"
         logging.debug(f"Memory usage {memory_usage_percent:.1f}% exceeds the scale-up threshold.")
+    elif swap_usage_percent is not None and swap_usage_percent > swap_scale_up_threshold:
+        ram_action = "Scale Up"
+        logging.debug(
+            f"Swap usage {swap_usage_percent:.1f}% exceeds swap_scale_up_threshold "
+            f"({swap_scale_up_threshold}%); scaling RAM up.")
     elif memory_usage_percent < thresholds["ram_scale_down_threshold"]:
-        ram_action = "Scale Down"
-        logging.debug(f"Memory usage {memory_usage_percent:.1f}% is below the scale-down threshold.")
+        if swap_usage_percent is not None and swap_usage_percent > swap_block_threshold:
+            # Low RAM usage while pages sit in swap is not idle memory: taking
+            # RAM away would push more of the working set out and thrash.
+            logging.debug(
+                f"Memory usage {memory_usage_percent:.1f}% is below the scale-down threshold, "
+                f"but swap usage {swap_usage_percent:.1f}% exceeds "
+                f"swap_scale_down_block_threshold ({swap_block_threshold}%); not scaling RAM down.")
+        else:
+            ram_action = "Scale Down"
+            logging.debug(f"Memory usage {memory_usage_percent:.1f}% is below the scale-down threshold.")
 
     # Get current resources from the container
     current_cores = latest_metrics.get("current_cores", thresholds.get("min_cpu_cores", 2))
