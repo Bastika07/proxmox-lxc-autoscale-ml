@@ -135,6 +135,66 @@ class TestPreprocessing:
         assert chained == []
 
 
+class TestSpikeDetection:
+    """The spike flags compared a sample with rolling stats that already
+    contained it. In a window of n samples one value lies at most
+    (n-1)/sqrt(n) standard deviations from the mean -- 1.79 for the shipped
+    rolling_window 5 -- so with spike_threshold 2 no flag could ever fire."""
+
+    SHIPPED = {**BASE_CONFIG, "spike_detection": {"spike_threshold": 2, "rolling_window": 5}}
+
+    def frame(self, tmp_path, cpu_values, **overrides):
+        data = [make_snapshot(("104",), i, cycles=len(cpu_values),
+                              cpu_usage_percent=cpu, **overrides)
+                for i, cpu in enumerate(cpu_values)]
+        path = tmp_path / "spike.json"
+        path.write_text(json.dumps(data))
+        return preprocess_data(load_data(str(path)), self.SHIPPED)
+
+    def test_a_jump_fires_with_the_shipped_settings(self, tmp_path):
+        df = self.frame(tmp_path, [40, 41, 40, 42, 41, 40, 41, 95])
+        assert df["cpu_spike"].tolist() == [0, 0, 0, 0, 0, 0, 0, 1]
+
+    def test_ordinary_noise_does_not_fire(self, tmp_path):
+        df = self.frame(tmp_path, [40, 41, 40, 42, 41, 40, 41, 42, 40, 41])
+        assert df["cpu_spike"].sum() == 0
+
+    def test_the_first_samples_are_never_flagged(self, tmp_path):
+        """Not a full window of history to compare with yet; a two- or
+        three-sample standard deviation flagged ordinary noise."""
+        df = self.frame(tmp_path, [40, 41, 40, 42, 95])
+        assert df["cpu_spike"].sum() == 0
+
+    def test_a_flat_history_flags_any_change(self, tmp_path):
+        """Swap sits at exactly 0% for hours; the first MB is a change worth seeing."""
+        data = [make_snapshot(("104",), i, cycles=6, swap_total_mb=512,
+                              swap_usage_mb=0.0 if i < 5 else 50.0) for i in range(6)]
+        path = tmp_path / "flat.json"
+        path.write_text(json.dumps(data))
+        df = preprocess_data(load_data(str(path)), self.SHIPPED)
+        assert df["swap_spike"].tolist() == [0, 0, 0, 0, 0, 1]
+
+    def test_flags_are_per_container(self, tmp_path):
+        data = []
+        for i in range(8):
+            snapshot = make_snapshot(("104", "105"), i, cycles=8, cpu_usage_percent=40.0)
+            if i == 7:
+                snapshot["105"]["cpu_usage_percent"] = 95.0
+            data.append(snapshot)
+        path = tmp_path / "two.json"
+        path.write_text(json.dumps(data))
+        df = preprocess_data(load_data(str(path)), self.SHIPPED)
+        assert df[df["container_id"] == "104"]["cpu_spike"].sum() == 0
+        assert df[df["container_id"] == "105"]["cpu_spike"].iloc[-1] == 1
+
+    def test_the_flags_are_model_features(self, metrics_file):
+        """They were booleans, and the model trains on numeric columns only."""
+        df = preprocess_data(load_data(metrics_file()), BASE_CONFIG)
+        _, features = train_anomaly_models(df, BASE_CONFIG)
+        for column in ["cpu_spike", "memory_spike", "swap_spike"]:
+            assert column in features
+
+
 class TestSwapFeatures:
     """Swap pressure is a signal the model could not see: only the raw MB
     columns reached it, which say nothing about how full the swap is."""

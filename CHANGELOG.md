@@ -13,8 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   container's swap), its rolling mean and standard deviation, `swap_trend` and
   a `swap_spike` flag are derived alongside the CPU and memory features. Before,
   only the raw swap MB reached the IsolationForest, which cannot tell a nearly
-  full 512 MB swap from a lightly used 8 GB one. The model trains on 30
-  features instead of 26.
+  full 512 MB swap from a lightly used 8 GB one.
+
+### Fixed
+
+- Spike detection never fired. `cpu_spike` and `memory_spike` compared each
+  sample with rolling statistics that already contained it, and with the
+  shipped `rolling_window: 5` one sample can lie at most 1.79 standard
+  deviations from that mean -- below `spike_threshold: 2`. Each sample is now
+  compared with the window before it. The flags are also 0/1 integers now
+  instead of booleans, so they reach the model; before, it trained on numeric
+  columns only and skipped them.
+- With both changes the model trains on 33 features instead of 26.
 
 ## [1.4.0] - 2026-08-18
 

@@ -98,11 +98,12 @@ The IsolationForest algorithm detects anomalies by isolating observations. It wo
 - Efficient for high-dimensional data
 - Good at detecting outliers in resource usage patterns
 
-**Features used for training** (30 total):
+**Features used for training** (33 total):
 
 - CPU metrics: usage, rolling mean/std, trend, min/max, per-process
 - Memory metrics: usage, rolling mean/std, trend, min/max, per-process
 - Swap metrics: used, total, fill level (%), rolling mean/std and trend of the fill level
+- Spike flags (0/1) for CPU, memory and swap
 - Combined: CPU/memory ratio
 - Disk: used, free, total
 - Network: RX/TX bytes
