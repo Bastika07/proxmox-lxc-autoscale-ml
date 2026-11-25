@@ -55,17 +55,29 @@ IsolationForest is an unsupervised machine learning algorithm for anomaly detect
 | -1 | Anomaly (unusual resource usage) |
 | 1 | Normal behavior |
 
-### Features Used (26 total)
+### Features Used (30 total)
 
 | Category | Features |
 |----------|----------|
 | CPU | `cpu_usage_percent`, `rolling_mean_cpu`, `rolling_std_cpu`, `cpu_trend`, `max_cpu`, `min_cpu`, `cpu_per_process` |
-| Memory | `memory_usage_mb`, `rolling_mean_memory`, `rolling_std_memory`, `memory_trend`, `max_memory`, `min_memory`, `memory_per_process`, `swap_usage_mb`, `swap_total_mb` |
+| Memory | `memory_usage_mb`, `rolling_mean_memory`, `rolling_std_memory`, `memory_trend`, `max_memory`, `min_memory`, `memory_per_process` |
+| Swap | `swap_usage_mb`, `swap_total_mb`, `swap_usage_percent`, `rolling_mean_swap`, `rolling_std_swap`, `swap_trend` |
 | Combined | `cpu_memory_ratio` |
 | Disk | `filesystem_usage_gb`, `filesystem_free_gb`, `filesystem_total_gb` |
 | Network | `network_rx_bytes`, `network_tx_bytes` |
 | I/O | `io_reads`, `io_writes` |
 | System | `process_count`, `time_diff` |
+
+`swap_usage_percent` is `swap_usage_mb / swap_total_mb * 100`, and the rolling
+mean, standard deviation and trend for swap are computed on that percentage
+rather than on MB. That makes swap pressure comparable across containers with
+different swap sizes: 480 MB of swap is unremarkable on a container with 8 GB
+of swap and a warning sign on one with 512 MB. A container without swap, or a
+monitor running with `enable_swap: false`, reports 0% rather than NaN.
+
+The spike flags `cpu_spike`, `memory_spike` and `swap_spike` are computed as
+well, but they are boolean columns and the model trains on numeric columns
+only, so they are not among the features above.
 
 ### Configuration
 

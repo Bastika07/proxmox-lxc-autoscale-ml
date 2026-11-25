@@ -5,6 +5,17 @@ All notable changes to the LXC AutoScale ML project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The model now sees swap pressure. `swap_usage_percent` (fill level of the
+  container's swap), its rolling mean and standard deviation, `swap_trend` and
+  a `swap_spike` flag are derived alongside the CPU and memory features. Before,
+  only the raw swap MB reached the IsolationForest, which cannot tell a nearly
+  full 512 MB swap from a lightly used 8 GB one. The model trains on 30
+  features instead of 26.
+
 ## [1.4.0] - 2026-08-18
 
 ### Upgrade notes

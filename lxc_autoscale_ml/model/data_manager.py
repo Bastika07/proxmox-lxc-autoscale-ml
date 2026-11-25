@@ -102,6 +102,10 @@ def preprocess_data(df, config):
         df['cpu_per_process'] = _safe_ratio(df['cpu_usage_percent'], df['process_count'])
         df['memory_per_process'] = _safe_ratio(df['memory_usage_mb'], df['process_count'])
         df['cpu_memory_ratio'] = _safe_ratio(df['cpu_usage_percent'], df['memory_usage_mb'])
+        # Swap pressure relative to the container's own swap size, so a
+        # container with 512 MB swap and one with 8 GB are comparable. No swap
+        # configured (or enable_swap: false in the monitor) reports 0, not NaN.
+        df['swap_usage_percent'] = _safe_ratio(df['swap_usage_mb'], df['swap_total_mb']) * 100
 
         # Fix for time_diff calculation
         try:
@@ -123,15 +127,25 @@ def preprocess_data(df, config):
             lambda x: x.rolling(window=rolling_window_size, min_periods=1).mean())
         df['rolling_std_memory'] = df.groupby('container_id')['memory_usage_mb'].transform(
             lambda x: x.rolling(window=rolling_window_size, min_periods=1).std()).fillna(0)
+        # Swap is tracked as a percentage rather than MB: a container that
+        # starts swapping is the signal, and the percentage makes that signal
+        # comparable across containers with different swap sizes.
+        df['rolling_mean_swap'] = df.groupby('container_id')['swap_usage_percent'].transform(
+            lambda x: x.rolling(window=rolling_window_size, min_periods=1).mean())
+        df['rolling_std_swap'] = df.groupby('container_id')['swap_usage_percent'].transform(
+            lambda x: x.rolling(window=rolling_window_size, min_periods=1).std()).fillna(0)
 
         # Spike detection
         df['cpu_spike'] = np.abs(df['cpu_usage_percent'] - df['rolling_mean_cpu']) > (spike_threshold * df['rolling_std_cpu'])
         df['memory_spike'] = np.abs(df['memory_usage_mb'] - df['rolling_mean_memory']) > (spike_threshold * df['rolling_std_memory'])
+        df['swap_spike'] = np.abs(df['swap_usage_percent'] - df['rolling_mean_swap']) > (spike_threshold * df['rolling_std_swap'])
 
         # Trend detection using the slope of the rolling window
         df['cpu_trend'] = df.groupby('container_id')['cpu_usage_percent'].transform(
             lambda x: _rolling_trend(x, rolling_window_size))
         df['memory_trend'] = df.groupby('container_id')['memory_usage_mb'].transform(
+            lambda x: _rolling_trend(x, rolling_window_size))
+        df['swap_trend'] = df.groupby('container_id')['swap_usage_percent'].transform(
             lambda x: _rolling_trend(x, rolling_window_size))
 
         # Aggregated features
