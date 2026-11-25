@@ -1,7 +1,29 @@
 import pandas as pd
 import logging
 import json
+from datetime import UTC, datetime
+
 import numpy as np
+
+
+def _parse_timestamp(value):
+    """One metrics timestamp as an aware UTC datetime.
+
+    The monitor writes timezone-aware UTC timestamps; older monitors wrote
+    naive local time. Both can sit in the same file for as long as the old
+    rows are retained, and pandas refuses to mix them ("Cannot subtract
+    tz-naive and tz-aware"), so every value is normalised to UTC here. A naive
+    value is read as the host's local time, which is what the old monitor
+    meant by it.
+    """
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()  # naive -> local time zone
+    return parsed.astimezone(UTC)
+
+
+def _timestamps_to_utc(series):
+    return pd.to_datetime(series.map(_parse_timestamp), utc=True)
 
 def load_data(file_path):
     try:
@@ -23,7 +45,7 @@ def load_data(file_path):
         return None
 
     records = []
-    for snapshot in data:
+    for snapshot_index, snapshot in enumerate(data):
         for container_id, metrics in snapshot.items():
             if container_id == "summary":
                 continue  # Skip the summary, focus on container data
@@ -31,6 +53,10 @@ def load_data(file_path):
             try:
                 record = {
                     "container_id": container_id,
+                    # Which collection cycle the row came from. The monitor
+                    # stamps containers of one cycle individually in older
+                    # versions, so "same timestamp" cannot identify a cycle.
+                    "snapshot": snapshot_index,
                     "timestamp": metrics["timestamp"],
                     "cpu_usage_percent": metrics["cpu_usage_percent"],
                     "memory_usage_mb": metrics["memory_usage_mb"],
@@ -56,7 +82,7 @@ def load_data(file_path):
 
     df = pd.DataFrame(records)
     try:
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df['timestamp'] = _timestamps_to_utc(df['timestamp'])
     except Exception as e:
         logging.error(f"Error converting timestamps: {e}")
         return None

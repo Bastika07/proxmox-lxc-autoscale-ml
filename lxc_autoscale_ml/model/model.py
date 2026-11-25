@@ -6,7 +6,9 @@ import numpy as np
 
 def train_anomaly_models(df, config):
     # Select only numeric features for training, excluding non-relevant columns
-    features_to_use = df.select_dtypes(include=[np.number]).columns.difference(['container_id', 'timestamp'])
+    # `snapshot` is a row's position in the metrics file, not a measurement.
+    features_to_use = df.select_dtypes(include=[np.number]).columns.difference(
+        ['container_id', 'timestamp', 'snapshot'])
     X_train = df[features_to_use]
 
     logging.info(f"Features used for training: {list(features_to_use)}")

@@ -243,15 +243,17 @@ class TestSwapDrivesRamScaling:
 
     def test_heavy_swap_scales_ram_up_although_ram_looks_moderate(self):
         # 50% RAM is between the shipped 30/75 thresholds: RAM alone says nothing.
+        # 2048 MB in RAM + 1024 MB in swap is 75% of the 4096 MB limit: the
+        # swapped pages would not fit, so swap is real pressure.
         config = self.config()
-        assert self.decide(config, 2048, 0, 1024) == ("No Scaling", None)
-        assert self.decide(config, 2048, 512, 1024) == ("Scale Up", 4096 + 512)
+        assert self.decide(config, 2048, 0, 2048) == ("No Scaling", None)
+        assert self.decide(config, 2048, 1024, 2048) == ("Scale Up", 4096 + 512)
 
     def test_the_scale_up_threshold_is_the_configured_one(self):
         # 30% of swap in use: above the shipped 20, below a configured 40.
-        assert self.decide(self.config(), 2048, 307, 1024)[0] == "Scale Up"
+        assert self.decide(self.config(), 2048, 1024, 3413)[0] == "Scale Up"
         assert self.decide(self.config(swap_scale_up_threshold=40),
-                           2048, 307, 1024)[0] == "No Scaling"
+                           2048, 1024, 3413)[0] == "No Scaling"
 
     def test_swapping_blocks_ram_scale_down(self):
         # 10% RAM would scale down; 10% swap in use is above the block level.
@@ -302,8 +304,8 @@ class TestSwapDrivesRamScaling:
             stamp = (datetime.now() - timedelta(seconds=60 * (7 - i))).isoformat()
             metrics.append({"104": {
                 "timestamp": stamp, "cpu_usage_percent": 50.0,
-                "memory_usage_mb": 2048.0 + i, "swap_usage_mb": 600.0 + i,
-                "swap_total_mb": 1024.0, "process_count": 20 + i,
+                "memory_usage_mb": 2048.0 + i, "swap_usage_mb": 1100.0 + i,
+                "swap_total_mb": 2048.0, "process_count": 20 + i,
                 "io_stats": {"reads": i, "writes": i},
                 "network_usage": {"rx_bytes": i, "tx_bytes": i},
                 "filesystem_usage_gb": 2.0, "filesystem_total_gb": 8.0,

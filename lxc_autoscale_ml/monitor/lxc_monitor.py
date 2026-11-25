@@ -404,8 +404,15 @@ async def get_container_process_count(container_id: str, executor: ThreadPoolExe
     return len(lines)
 
 
-async def collect_metrics_for_container(container_id: str, executor: ThreadPoolExecutor) -> tuple[str, dict[str, Any]]:
-    """Collect all metrics for a given container."""
+async def collect_metrics_for_container(container_id: str, executor: ThreadPoolExecutor,
+                                       timestamp: str | None = None) -> tuple[str, dict[str, Any]]:
+    """Collect all metrics for a given container.
+
+    `timestamp` is the cycle's shared timestamp. Every container of one cycle
+    must carry the same one: the model identifies the newest snapshot by it,
+    and per-container stamps (a few milliseconds apart) left exactly one
+    container in "the newest snapshot", so only that one was ever evaluated.
+    """
     logger.info(f"Collecting metrics for container: {container_id}")
 
     cpu_usage = await retry_on_failure(get_container_cpu_usage, container_id, executor)
@@ -432,7 +439,7 @@ async def collect_metrics_for_container(container_id: str, executor: ThreadPoolE
     container_metrics = {
         # Timezone-aware: naive local timestamps went backwards for an hour at
         # the DST fall-back, and `time_diff` is a training feature.
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": timestamp or datetime.now(UTC).isoformat(),
         "cpu_usage_percent": cpu_usage,
         "memory_usage_mb": memory_swap_usage.get("memory_usage_mb", 0.0),
         "swap_usage_mb": memory_swap_usage.get("swap_usage_mb", 0.0),
@@ -453,6 +460,7 @@ async def collect_metrics_for_container(container_id: str, executor: ThreadPoolE
 async def collect_and_export_metrics():
     """Collect and export metrics for all running LXC containers."""
     start_time = datetime.now(UTC)
+    cycle_timestamp = start_time.isoformat()
     metrics = {}
     containers = get_running_lxc_containers()
 
@@ -466,7 +474,7 @@ async def collect_and_export_metrics():
     executor = ThreadPoolExecutor(max_workers=settings.max_workers)
     try:
         if settings.parallel_processing:
-            tasks = [collect_metrics_for_container(cid, executor) for cid in containers]
+            tasks = [collect_metrics_for_container(cid, executor, cycle_timestamp) for cid in containers]
             # return_exceptions keeps one unhealthy container from discarding
             # the metrics collected for every other container in the cycle.
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -474,7 +482,8 @@ async def collect_and_export_metrics():
             results = []
             for container_id in containers:
                 try:
-                    results.append(await collect_metrics_for_container(container_id, executor))
+                    results.append(await collect_metrics_for_container(
+                        container_id, executor, cycle_timestamp))
                 except Exception as e:  # noqa: BLE001 - recorded below, per container
                     results.append(e)
     finally:

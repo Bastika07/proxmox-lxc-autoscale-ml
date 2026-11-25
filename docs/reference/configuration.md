@@ -423,7 +423,7 @@ state. Gunicorn logs a warning at startup if `workers` is above 1.
 | `scaling.cpu_scale_down_threshold` | integer | `30` | CPU % below which to scale down |
 | `scaling.ram_scale_up_threshold` | integer | `75` | RAM % above which to scale up |
 | `scaling.ram_scale_down_threshold` | integer | `30` | RAM % below which to scale down |
-| `scaling.swap_scale_up_threshold` | integer | `20` | Swap % (of the container's swap) above which RAM is scaled up, even if RAM usage looks moderate |
+| `scaling.swap_scale_up_threshold` | integer | `20` | Swap % (of the container's swap) above which RAM is scaled up, even if RAM usage looks moderate -- but only while RAM used plus swap used reaches `ram_scale_up_threshold` of the current RAM limit |
 | `scaling.swap_scale_down_block_threshold` | integer | `5` | Swap % above which RAM is never scaled down. Must not exceed `swap_scale_up_threshold` |
 | `scaling.manage_swap_limit` | boolean | `false` | Keep each container's swap limit (`pct set -swap`) at `swap_ratio` x its RAM, set in the same call as RAM. Containers with swap 0 are left alone |
 | `scaling.swap_ratio` | number | `0.5` | Swap limit as a fraction of the RAM limit |

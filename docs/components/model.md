@@ -123,7 +123,19 @@ Scale UP if:
   - IsolationForest detects anomaly (-1)
   - RAM usage % > ram_scale_up_threshold (default 75%)
     OR swap usage % > swap_scale_up_threshold (default 20%)
+       AND (RAM used + swap used) >= ram_scale_up_threshold
+           of the current RAM limit
   - Current RAM < max_ram_mb
+
+Swap on its own is not pressure: the kernel does not page swapped
+memory back in when RAM is added, so swap usage stays put after a
+scale-up. Swap only drives a scale-up while RAM could not hold what
+is in swap; each step lowers that ratio, so the series ends after
+one or two steps instead of running to max_ram_mb.
+
+A container configured outside [min, max] by hand is not moved the
+"wrong" way: a scale-down never raises RAM to min_ram_mb, a scale-up
+never lowers it to max_ram_mb (same for CPU cores).
 
 Scale DOWN if:
   - IsolationForest reports normal (1)
