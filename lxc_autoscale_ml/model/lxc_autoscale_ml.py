@@ -17,7 +17,7 @@ from lock_manager import create_lock_file, remove_lock_file
 from config_manager import load_config
 from data_manager import load_data, preprocess_data
 from model import train_anomaly_models, predict_anomalies
-from scaling_decisions import determine_scaling_action, apply_scaling
+from scaling_decisions import determine_scaling_action, determine_swap_limit, apply_scaling
 from signal_handler import setup_signal_handlers
 from async_api_client import fetch_container_configs_sync
 
@@ -257,6 +257,9 @@ def evaluate_container(container_id, df, model, features_to_use, container_confi
 
     latest_metrics["current_cores"] = cores
     latest_metrics["current_ram_mb"] = memory_mb
+    # None from an API that predates swap_mb; determine_swap_limit then leaves
+    # swap alone rather than guessing.
+    latest_metrics["current_swap_mb"] = (container_config or {}).get("swap_mb")
     logging.debug(
         f"Container {container_id} current config: {cores} cores, {memory_mb} MB RAM")
 
@@ -275,7 +278,10 @@ def evaluate_container(container_id, df, model, features_to_use, container_confi
         f"CPU - {cpu_action}, RAM - {ram_action} | Confidence: {confidence:.2f}%"
     )
 
-    if cpu_action == "No Scaling" and ram_action == "No Scaling":
+    new_swap = determine_swap_limit(latest_metrics, new_ram, config)
+    swap_note = "" if new_swap is None else f", swap -> {new_swap} MB"
+
+    if cpu_action == "No Scaling" and ram_action == "No Scaling" and new_swap is None:
         logging.info(f"No scaling needed for container {container_id}. | Confidence: {confidence:.2f}%")
         return
 
@@ -289,16 +295,17 @@ def evaluate_container(container_id, df, model, features_to_use, container_confi
     if dry_run:
         logging.info(
             f"[dry_run] Would scale container {container_id}: "
-            f"CPU - {cpu_action} (-> {new_cores}), RAM - {ram_action} (-> {new_ram}) "
+            f"CPU - {cpu_action} (-> {new_cores}), RAM - {ram_action} (-> {new_ram}){swap_note} "
             f"| Confidence: {confidence:.2f}%"
         )
         return
 
     logging.info(
         f"Applying scaling actions for container {container_id}: "
-        f"CPU - {cpu_action}, RAM - {ram_action} | Confidence: {confidence:.2f}%"
+        f"CPU - {cpu_action}, RAM - {ram_action}{swap_note} | Confidence: {confidence:.2f}%"
     )
-    apply_scaling(container_id, new_cores, new_ram, config)
+    apply_scaling(container_id, new_cores, new_ram, config,
+                  new_swap=new_swap, current_ram=memory_mb)
 
 
 def main():

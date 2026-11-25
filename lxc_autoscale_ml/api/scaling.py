@@ -9,11 +9,14 @@ def scale_cpu(vm_id, cores):
     except Exception as e:
         return handle_error(e)
 
-def scale_ram(vm_id, memory):
+def scale_ram(vm_id, memory, swap=None):
     try:
         lxc_manager = LXCManager()
-        result = lxc_manager.scale_ram(vm_id, memory)
-        return create_response(data=result, message=f"RAM set to {memory} MB for container {vm_id}")
+        result = lxc_manager.scale_ram(vm_id, memory, swap=swap)
+        message = f"RAM set to {memory} MB for container {vm_id}"
+        if swap is not None:
+            message = f"RAM set to {memory} MB and swap to {swap} MB for container {vm_id}"
+        return create_response(data=result, message=message)
     except Exception as e:
         return handle_error(e)
 

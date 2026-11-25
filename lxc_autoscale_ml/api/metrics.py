@@ -55,6 +55,12 @@ if PROMETHEUS_AVAILABLE:
         ['container_id']
     )
 
+    container_swap_mb = Gauge(
+        'lxc_autoscale_container_swap_mb',
+        'Current swap limit in MB',
+        ['container_id']
+    )
+
 
 def metrics_endpoint():
     """Generate Prometheus metrics endpoint."""
@@ -94,7 +100,7 @@ def record_scaling_action(container_id, resource, action, success=True, failure_
             reason=failure_reason or 'unknown'
         ).inc()
 
-def update_container_resources(container_id, cpu_cores=None, memory_mb=None):
+def update_container_resources(container_id, cpu_cores=None, memory_mb=None, swap_mb=None):
     """Update the gauges for a container's allocated resources.
 
     Usage figures are collected by the monitor, which the API never sees, so
@@ -107,6 +113,8 @@ def update_container_resources(container_id, cpu_cores=None, memory_mb=None):
         container_cpu_cores.labels(container_id=container_id).set(cpu_cores)
     if memory_mb is not None:
         container_memory_mb.labels(container_id=container_id).set(memory_mb)
+    if swap_mb is not None:
+        container_swap_mb.labels(container_id=container_id).set(swap_mb)
 
 
 # Log warning if Prometheus is not available

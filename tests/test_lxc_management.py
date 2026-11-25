@@ -154,6 +154,23 @@ class TestCommandShapes:
         pct.assert_no_shell_syntax()
         assert all(argv[0] == "pct" for argv in pct)
 
+    def test_ram_and_swap_are_set_in_one_command(self, manager, pct):
+        manager.scale_ram(104, 2048, swap=1024)
+        pct.assert_ran("pct", "set", 104, "-memory", 2048, "-swap", 1024)
+        assert len(pct) == 1
+
+    def test_ram_without_swap_leaves_swap_alone(self, manager, pct):
+        manager.scale_ram(104, 2048)
+        assert list(pct[-1]) == ["pct", "set", "104", "-memory", "2048"]
+
+    def test_current_allocation_includes_swap(self, manager, pct):
+        assert manager.get_current_allocation(104) == {"cores": 2, "memory": 2048, "swap": 512}
+        pct.output = "cores: 2\nmemory: 2048\nswap: 0\n"
+        assert manager.get_current_allocation(104)["swap"] == 0
+        # No swap line is "unknown", not "no swap".
+        pct.output = "cores: 2\nmemory: 2048\n"
+        assert manager.get_current_allocation(104)["swap"] is None
+
     def test_clone_variants_use_the_right_flags(self, manager, pct):
         manager.clone_container(104, 105, "web-1", "snap-1")
         pct.assert_ran(

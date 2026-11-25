@@ -94,8 +94,19 @@ class LXCManager:
     def scale_cpu(self, lxc_id, cores):
         return self._run_command(["pct", "set", lxc_id, "-cores", cores])
 
-    def scale_ram(self, lxc_id, memory):
-        return self._run_command(["pct", "set", lxc_id, "-memory", memory])
+    def scale_ram(self, lxc_id, memory, swap=None):
+        """Set the RAM limit and, when given, the swap limit.
+
+        Both go into ONE `pct set`. Sent as two commands, a RAM scale-down
+        followed by a swap scale-down would briefly leave the container with
+        less RAM while the old swap still had to absorb what was pushed out --
+        or, in the other order, with less swap while RAM was still being
+        reclaimed into it. One call changes both limits together.
+        """
+        command = ["pct", "set", lxc_id, "-memory", memory]
+        if swap is not None:
+            command += ["-swap", swap]
+        return self._run_command(command)
 
     def get_config(self, lxc_id):
         """Return `pct config` output as a dict of key -> value."""
@@ -141,6 +152,14 @@ class LXCManager:
     def get_current_resources(self, lxc_id):
         """Return (cores, memory_mb) for a container.
 
+        Kept for callers that predate swap; see get_current_allocation.
+        """
+        allocation = self.get_current_allocation(lxc_id)
+        return allocation["cores"], allocation["memory"]
+
+    def get_current_allocation(self, lxc_id):
+        """Return {"cores", "memory", "swap"} for a container, in cores and MB.
+
         Either may be None. `cores` in particular is OPTIONAL in Proxmox --
         `pct create` without `--cores` leaves it unset, meaning "all host
         cores" -- and treating its absence as an error made
@@ -161,7 +180,9 @@ class LXCManager:
                     f"Container {lxc_id} reports a non-numeric {key}: {raw!r}")
                 return None
 
-        return optional_int("cores"), optional_int("memory")
+        # `swap` is optional too. Absent means "not recorded in the config",
+        # which is not the same as 0 (no swap), so it stays None.
+        return {key: optional_int(key) for key in ("cores", "memory", "swap")}
 
     def resize_storage(self, lxc_id, disk_size):
         """Grow the root filesystem by `disk_size` GB.

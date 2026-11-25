@@ -83,6 +83,23 @@ def validate_memory(memory):
     except (ValueError, TypeError, OverflowError) as e:
         raise ValidationError(f"Invalid memory format: {memory}") from e
 
+def validate_swap(swap):
+    """
+    Validate a swap limit in MB.
+
+    0 is valid: it is how Proxmox expresses "no swap".
+
+    Raises:
+        ValidationError: If the value is not an integer in 0-1048576
+    """
+    try:
+        swap_int = int(swap)
+    except (ValueError, TypeError, OverflowError) as e:
+        raise ValidationError(f"Invalid swap format: {swap}") from e
+    if swap_int < 0 or swap_int > 1048576:
+        raise ValidationError(f"Swap must be between 0 and 1048576 MB, got {swap_int}")
+    return swap_int
+
 def validate_disk_size(disk_size):
     """
     Validate disk size in GB.

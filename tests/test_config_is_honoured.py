@@ -354,3 +354,103 @@ class TestSwapThresholdValidation:
         from config_manager import validate_scaling_config
 
         validate_scaling_config({"scaling": shipped("lxc_autoscale_ml.yaml")["scaling"]})
+
+
+class TestSwapLimitIsManaged:
+    """`manage_swap_limit`, `swap_ratio`, `min_swap_mb` and `max_swap_mb` must
+    change the swap limit that is sent, and the OOM guard must stop a RAM
+    scale-down that would not fit what the container holds."""
+
+    @staticmethod
+    def config(**overrides):
+        scaling = dict(shipped("lxc_autoscale_ml.yaml")["scaling"])
+        scaling.update(overrides)
+        return {"scaling": scaling}
+
+    @staticmethod
+    def swap_for(config, new_ram, current_ram=4096, current_swap=512, swap_usage_mb=0.0):
+        import pandas as pd
+        from scaling_decisions import determine_swap_limit
+
+        metrics = pd.Series({
+            "current_ram_mb": current_ram, "current_swap_mb": current_swap,
+            "swap_usage_mb": swap_usage_mb, "swap_total_mb": current_swap or 0,
+        })
+        return determine_swap_limit(metrics, new_ram, config)
+
+    def test_off_by_default(self):
+        assert self.config()["scaling"]["manage_swap_limit"] is False
+        assert self.swap_for(self.config(), 8192) is None
+
+    def test_swap_follows_ram_at_the_ratio(self):
+        config = self.config(manage_swap_limit=True)
+        assert self.swap_for(config, 4608) == 2304
+        # RAM unchanged: the limit still converges to the ratio.
+        assert self.swap_for(config, None) == 2048
+        assert self.swap_for(self.config(manage_swap_limit=True, swap_ratio=0.25), None) == 1024
+
+    def test_bounds_are_honoured(self):
+        assert self.swap_for(self.config(manage_swap_limit=True, max_swap_mb=1024), 8192) == 1024
+        assert self.swap_for(self.config(manage_swap_limit=True, min_swap_mb=1024),
+                             1024, current_swap=2048) == 1024
+        assert self.swap_for(self.config(manage_swap_limit=True, swap_ratio=0.1, min_swap_mb=768),
+                             1024) == 768
+
+    def test_already_at_target_is_no_action(self):
+        assert self.swap_for(self.config(manage_swap_limit=True), None, current_swap=2048) is None
+
+    def test_containers_without_swap_are_left_alone(self):
+        assert self.swap_for(self.config(manage_swap_limit=True), 8192, current_swap=0) is None
+
+    def test_unknown_swap_limit_is_left_alone(self):
+        # An API that predates swap_mb reports nothing; never guess.
+        assert self.swap_for(self.config(manage_swap_limit=True), 8192, current_swap=None) is None
+
+    def test_shrink_never_goes_below_what_is_in_swap(self):
+        config = self.config(manage_swap_limit=True)
+        # Target 1024 (2048 x 0.5), but 1000 MB are swapped out: keep 1250.
+        assert self.swap_for(config, 2048, current_ram=2560, current_swap=4096,
+                             swap_usage_mb=1000) == 1250
+        # ...and never grows past the current limit just to make room.
+        assert self.swap_for(config, 2048, current_ram=2560, current_swap=1200,
+                             swap_usage_mb=1000) is None
+
+    def test_ram_scale_down_is_blocked_when_ram_plus_swap_would_not_fit(self):
+        import pandas as pd
+        from scaling_decisions import determine_scaling_action
+
+        def decide(memory_usage_mb, swap_usage_mb, current_ram_mb):
+            metrics = pd.Series({
+                "cpu_usage_percent": 50.0, "memory_usage_mb": memory_usage_mb,
+                # Swap total large enough that the swap thresholds stay quiet.
+                "swap_usage_mb": swap_usage_mb, "swap_total_mb": 100_000,
+                "current_cores": 3, "current_ram_mb": current_ram_mb,
+            })
+            return determine_scaling_action(metrics, 1, 90.0, self.config())[1:4:2]
+
+        # 29% of 1536 MB in RAM, nothing in swap: 445 MB fits 1024 MB well.
+        assert decide(445, 0, 1536) == ("Scale Down", 1024)
+        # Same RAM, 400 MB in swap (0.4% of swap, under the block threshold):
+        # 845 MB would be 82% of 1024 MB -- at the scale-up threshold. Hold.
+        assert decide(445, 400, 1536) == ("No Scaling", None)
+
+    def test_swap_is_sent_with_ram_in_one_request(self, monkeypatch):
+        import scaling_decisions
+
+        sent = []
+
+        class Ok:
+            def raise_for_status(self):
+                pass
+
+        monkeypatch.setattr(scaling_decisions.requests, "post",
+                            lambda url, json, **kw: sent.append((url, json)) or Ok())
+        config = {"api": {"api_url": "http://api"}}
+        scaling_decisions.apply_scaling("104", None, 4608, config, new_swap=2304)
+        scaling_decisions.apply_scaling("105", None, None, config, new_swap=1024, current_ram=2048)
+        scaling_decisions.apply_scaling("106", None, 4608, config)
+        assert [(url, body.get("memory"), body.get("swap")) for url, body in sent] == [
+            ("http://api/scale/ram", 4608, 2304),
+            ("http://api/scale/ram", 2048, 1024),
+            ("http://api/scale/ram", 4608, None),
+        ]

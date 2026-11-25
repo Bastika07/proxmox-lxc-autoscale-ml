@@ -222,6 +222,13 @@ scaling:
   # containers without swap and when the monitor runs with enable_swap: false.
   swap_scale_up_threshold: 20  # Swap usage percentage that triggers a RAM scale-up
   swap_scale_down_block_threshold: 5  # Swap usage percentage above which RAM is never scaled down
+  # Swap LIMIT (pct set -swap), set together with RAM in one call. Off by
+  # default; needs an API that reports swap_mb. Containers with swap 0 are
+  # never given swap.
+  manage_swap_limit: false  # If true, keep each container's swap limit at swap_ratio x RAM
+  swap_ratio: 0.5  # Swap limit as a fraction of the RAM limit
+  min_swap_mb: 0  # Lower bound for a managed swap limit in MB
+  max_swap_mb: 4096  # Upper bound for a managed swap limit in MB
   # Minimum confidence (0-100) required before a scaling action is applied.
   # 0 disables the check. Confidence is the percentile of this sample's distance
   # from the model's decision boundary among the distances seen while training:
@@ -418,6 +425,10 @@ state. Gunicorn logs a warning at startup if `workers` is above 1.
 | `scaling.ram_scale_down_threshold` | integer | `30` | RAM % below which to scale down |
 | `scaling.swap_scale_up_threshold` | integer | `20` | Swap % (of the container's swap) above which RAM is scaled up, even if RAM usage looks moderate |
 | `scaling.swap_scale_down_block_threshold` | integer | `5` | Swap % above which RAM is never scaled down. Must not exceed `swap_scale_up_threshold` |
+| `scaling.manage_swap_limit` | boolean | `false` | Keep each container's swap limit (`pct set -swap`) at `swap_ratio` x its RAM, set in the same call as RAM. Containers with swap 0 are left alone |
+| `scaling.swap_ratio` | number | `0.5` | Swap limit as a fraction of the RAM limit |
+| `scaling.min_swap_mb` | integer | `0` | Lower bound for a managed swap limit |
+| `scaling.max_swap_mb` | integer | `4096` | Upper bound for a managed swap limit |
 | `scaling.min_confidence` | integer | `0` | Confidence (0-100) required before acting; 0 disables the check |
 | `scaling.dry_run` | boolean | `false` | Log decisions without calling the API |
 | `circuit_breaker.enabled` | boolean | `true` | Stop calling the API for a container after repeated failures |
@@ -431,6 +442,14 @@ Swap usage is `swap_usage_mb / swap_total_mb` as reported by the monitor. A
 container whose `swap_total_mb` is 0 has no swap signal -- either it has no
 swap, or the monitor runs with `monitoring.enable_swap: false` -- and is scaled
 on RAM alone.
+
+RAM is not scaled down if what the container holds in RAM and swap together
+would reach `ram_scale_up_threshold` of the smaller limit. With
+`manage_swap_limit: true` the swap limit follows RAM, but a shrink never goes
+below 1.25 x the swap currently in use: lowering the limit under usage does
+not bring pages back, it only leaves the next squeeze to the OOM killer.
+Managing the swap limit needs an API that reports `swap_mb` from
+`/resource/lxc/config`; against an older API the model leaves swap alone.
 
 On confidence: it is the **percentile** of this sample's distance from the
 model's decision boundary among the distances seen while training. 90 means
@@ -480,6 +499,9 @@ contradictory one:
 | `cpu_scale_down_threshold >= cpu_scale_up_threshold` | `cpu_scale_down_threshold must be less than cpu_scale_up_threshold` |
 | `ram_scale_down_threshold >= ram_scale_up_threshold` | `ram_scale_down_threshold must be less than ram_scale_up_threshold` |
 | `swap_scale_down_block_threshold > swap_scale_up_threshold` | `swap_scale_down_block_threshold must not be greater than swap_scale_up_threshold` |
+| `swap_ratio` is negative or not a number | `swap_ratio must be a number >= 0, got <value>` |
+| `min_swap_mb` or `max_swap_mb` is negative or not an integer | `<key> must be an integer >= 0, got <value>` |
+| `min_swap_mb > max_swap_mb` | `min_swap_mb cannot be greater than max_swap_mb` |
 | A step size is zero or negative | `<key> must be positive` |
 
 `log_file`, `interval_seconds`, `api` and `api.api_url` are required; the rest
