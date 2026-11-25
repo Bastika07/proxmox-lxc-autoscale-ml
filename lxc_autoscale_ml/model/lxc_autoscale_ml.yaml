@@ -55,6 +55,13 @@ scaling:
   # containers without swap and when the monitor runs with enable_swap: false.
   swap_scale_up_threshold: 20  # Swap usage percentage that triggers a RAM scale-up
   swap_scale_down_block_threshold: 5  # Swap usage percentage above which RAM is never scaled down
+  # Swap LIMIT (pct set -swap), set together with RAM in one call. Off by
+  # default; needs an API that reports swap_mb. Containers with swap 0 are
+  # never given swap.
+  manage_swap_limit: false  # If true, keep each container's swap limit at swap_ratio x RAM
+  swap_ratio: 0.5  # Swap limit as a fraction of the RAM limit
+  min_swap_mb: 0  # Lower bound for a managed swap limit in MB
+  max_swap_mb: 4096  # Upper bound for a managed swap limit in MB
   # Minimum confidence (0-100) required before a scaling action is applied.
   # 0 disables the check. Confidence is the percentile of this sample's distance
   # from the model's decision boundary among the distances seen while training:

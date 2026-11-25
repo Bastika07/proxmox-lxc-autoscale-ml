@@ -364,7 +364,7 @@ class TestRunCycle:
         applied = []
         monkeypatch.setattr(
             orch, "apply_scaling",
-            lambda cid, cores, ram, config: applied.append((cid, cores, ram)))
+            lambda cid, cores, ram, config, **kw: applied.append((cid, cores, ram)))
         monkeypatch.setattr(
             orch, "fetch_container_configs_sync",
             lambda ids, url, **kw: {cid: {"cores": 2, "memory_mb": 1024} for cid in ids})
@@ -591,7 +591,7 @@ class TestScalingDirectionEndToEnd:
         applied = []
         monkeypatch.setattr(
             orch, "apply_scaling",
-            lambda cid, cores, ram, config: applied.append((cid, cores, ram)))
+            lambda cid, cores, ram, config, **kw: applied.append((cid, cores, ram)))
         monkeypatch.setattr(
             orch, "fetch_container_configs_sync",
             lambda ids, url, **kw: {cid: {"cores": 4, "memory_mb": 8192} for cid in ids})
@@ -664,7 +664,7 @@ class TestUnknownAllocationIsNotGuessed:
         applied = []
         monkeypatch.setattr(
             orch, "apply_scaling",
-            lambda cid, cores, ram, config: applied.append((cid, cores, ram)))
+            lambda cid, cores, ram, config, **kw: applied.append((cid, cores, ram)))
 
         def _run(fetch_result):
             monkeypatch.setattr(orch, "fetch_container_configs_sync",
@@ -704,7 +704,7 @@ class TestStaleAndDepartedContainers:
         applied = []
         monkeypatch.setattr(
             orch, "apply_scaling",
-            lambda cid, cores, ram, config: applied.append((cid, cores, ram)))
+            lambda cid, cores, ram, config, **kw: applied.append((cid, cores, ram)))
         monkeypatch.setattr(
             orch, "fetch_container_configs_sync",
             lambda ids, url, **kw: {cid: {"cores": 4, "memory_mb": 8192} for cid in ids})

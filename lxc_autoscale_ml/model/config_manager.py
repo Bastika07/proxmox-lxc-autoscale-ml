@@ -107,6 +107,17 @@ def validate_scaling_config(config):
         raise ConfigError(
             "swap_scale_down_block_threshold must not be greater than swap_scale_up_threshold")
 
+    # Swap limit management (manage_swap_limit).
+    swap_ratio = scaling.get('swap_ratio', 0.5)
+    if isinstance(swap_ratio, bool) or not isinstance(swap_ratio, (int, float)) or swap_ratio < 0:
+        raise ConfigError(f"swap_ratio must be a number >= 0, got {swap_ratio!r}")
+    for key in ('min_swap_mb', 'max_swap_mb'):
+        value = scaling.get(key, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ConfigError(f"{key} must be an integer >= 0, got {value!r}")
+    if scaling.get('min_swap_mb', 0) > scaling.get('max_swap_mb', 4096):
+        raise ConfigError("min_swap_mb cannot be greater than max_swap_mb")
+
     # Validate step sizes are positive
     if scaling.get('cpu_scale_step', 1) <= 0:
         raise ConfigError("cpu_scale_step must be positive")

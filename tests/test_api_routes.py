@@ -13,6 +13,7 @@ class TestGetConfigEndpoint:
         assert payload["status"] == "success"
         assert payload["data"]["cores"] == 2
         assert payload["data"]["memory_mb"] == 2048
+        assert payload["data"]["swap_mb"] == 512
         assert payload["data"]["lxc_id"] == 104
 
     def test_deprecated_vm_path_and_key_still_work(self, client, pct):
@@ -103,6 +104,22 @@ class TestScalingEndpoints:
         response = client.post("/scale/ram", json={"lxc_id": 104, "memory": 4096})
         assert response.status_code == 200
         pct.assert_ran("pct", "set", 104, "-memory", 4096)
+
+    def test_set_ram_with_swap(self, client, pct):
+        response = client.post("/scale/ram", json={"lxc_id": 104, "memory": 4096, "swap": 2048})
+        assert response.status_code == 200
+        pct.assert_ran("pct", "set", 104, "-memory", 4096, "-swap", 2048)
+
+    def test_swap_zero_is_valid(self, client, pct):
+        response = client.post("/scale/ram", json={"lxc_id": 104, "memory": 4096, "swap": 0})
+        assert response.status_code == 200
+        pct.assert_ran("pct", "set", 104, "-memory", 4096, "-swap", 0)
+
+    @pytest.mark.parametrize("swap", [-1, 2_000_000, "lots"])
+    def test_invalid_swap_rejected(self, client, pct, swap):
+        response = client.post("/scale/ram", json={"lxc_id": 104, "memory": 4096, "swap": swap})
+        assert response.status_code == 400
+        assert not any(argv[:2] == ["pct", "set"] for argv in pct)
 
     @pytest.mark.parametrize(
         "payload",

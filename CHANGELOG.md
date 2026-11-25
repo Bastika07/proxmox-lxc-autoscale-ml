@@ -16,6 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scaling.swap_scale_down_block_threshold` (default 5%). Containers without
   swap (`swap_total_mb: 0`, which includes monitors running with
   `enable_swap: false`) are scaled on RAM alone, as before.
+- **The swap limit can follow RAM.** With `scaling.manage_swap_limit: true`
+  (off by default) each container's swap limit is kept at `swap_ratio` x its
+  RAM (default 0.5), clamped to `min_swap_mb`/`max_swap_mb` (default 0-4096).
+  RAM and swap are changed in one `pct set -memory -swap`. Containers with
+  swap 0 are left without swap, and a shrink never goes below 1.25 x the swap
+  in use. `/scale/ram` accepts an optional `swap`, `/resource/lxc/config`
+  reports `swap_mb`, and a new gauge `lxc_autoscale_container_swap_mb` tracks
+  it. Upgrade the API before turning this on; against an older API the model
+  leaves swap alone.
+
+### Changed
+
+- **RAM is not scaled down if RAM plus swap in use would not fit.** A
+  scale-down is skipped when the container's RAM usage plus swap usage would
+  reach `ram_scale_up_threshold` of the smaller limit. This prevents pushing
+  the working set into swap (or the OOM killer) and scaling straight back up
+  next cycle.
 
 ## [1.4.0] - 2026-08-18
 

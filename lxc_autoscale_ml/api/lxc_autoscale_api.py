@@ -17,6 +17,7 @@ from validation import (
     validate_lxc_id,
     validate_cores,
     validate_memory,
+    validate_swap,
     validate_disk_size,
     validate_snapshot_name,
     validate_hostname,
@@ -40,7 +41,7 @@ app = create_app()
 ENDPOINTS = [
     ("/scale/cores", "POST", "Set the exact number of CPU cores for an LXC container.",
      """curl -X POST http://proxmox:5000/scale/cores -H "Content-Type: application/json" -d '{"lxc_id": 104, "cores": 4}'"""),
-    ("/scale/ram", "POST", "Set the exact amount of RAM for an LXC container.",
+    ("/scale/ram", "POST", "Set the exact amount of RAM (and optionally swap) for an LXC container.",
      """curl -X POST http://proxmox:5000/scale/ram -H "Content-Type: application/json" -d '{"lxc_id": 104, "memory": 4096}'"""),
     ("/scale/storage/increase", "POST", "Increase the storage size of an LXC container's root filesystem.",
      """curl -X POST http://proxmox:5000/scale/storage/increase -H "Content-Type: application/json" -d '{"lxc_id": 104, "disk_size": 2}'"""),
@@ -163,13 +164,18 @@ def set_cores():
 @app.route('/scale/ram', methods=['POST'])
 @rate_limit
 @require_api_key
-@validate_request({'vm_id': validate_lxc_id, 'memory': validate_memory})
+@validate_request({'vm_id': validate_lxc_id, 'memory': validate_memory,
+                   'swap': validate_swap}, optional_fields=('swap',))
 def set_ram():
     data = request.validated_data
     lxc_id = data['vm_id']
     memory = data['memory']
-    logging.info(f"Setting {memory} MB RAM for container {lxc_id}")
-    response = scale_ram(lxc_id, memory)
+    swap = data.get('swap')
+    if swap is None:
+        logging.info(f"Setting {memory} MB RAM for container {lxc_id}")
+    else:
+        logging.info(f"Setting {memory} MB RAM and {swap} MB swap for container {lxc_id}")
+    response = scale_ram(lxc_id, memory, swap=swap)
     record_scaling_action(lxc_id, 'ram', 'set', success=response[1] < 400,
                           failure_reason=_failure_reason(response))
     return response
@@ -316,17 +322,19 @@ def check_lxc_status_route():
 @require_api_key
 @validate_request({'vm_id': validate_lxc_id})
 def get_lxc_config_route():
-    """Get current CPU cores and RAM configuration for a container."""
+    """Get current CPU cores, RAM and swap configuration for a container."""
     lxc_id = request.validated_data['vm_id']
     logging.info(f"Getting configuration for container {lxc_id}")
     try:
         lxc_manager = LXCManager()
-        cores, memory = lxc_manager.get_current_resources(lxc_id)
+        allocation = lxc_manager.get_current_allocation(lxc_id)
+        cores, memory, swap = allocation["cores"], allocation["memory"], allocation["swap"]
         # The only place the API learns a container's real allocation, so it is
         # also where the gauges get their value.
-        update_container_resources(lxc_id, cpu_cores=cores, memory_mb=memory)
+        update_container_resources(lxc_id, cpu_cores=cores, memory_mb=memory, swap_mb=swap)
         return create_response(
-            data={"lxc_id": lxc_id, "vm_id": lxc_id, "cores": cores, "memory_mb": memory},
+            data={"lxc_id": lxc_id, "vm_id": lxc_id, "cores": cores, "memory_mb": memory,
+                  "swap_mb": swap},
             message=f"Successfully retrieved configuration for container {lxc_id}",
             status_code=200
         )

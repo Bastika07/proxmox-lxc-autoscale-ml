@@ -197,7 +197,8 @@ curl -X POST http://localhost:5000/scale/cores \
 
 ### POST /scale/ram
 
-Set the amount of RAM for a container.
+Set the amount of RAM for a container, and optionally its swap limit. Both go
+into one `pct set -memory <MB> -swap <MB>`.
 
 **Request:**
 
@@ -214,6 +215,7 @@ curl -X POST http://localhost:5000/scale/ram \
 |------|------|----------|------------|
 | `lxc_id` | integer | Yes | 100-999999 |
 | `memory` | integer | Yes | 64-1048576 (MB) |
+| `swap` | integer | No | 0-1048576 (MB). Omitted: swap is left as it is. 0 disables swap |
 
 **Response (200 OK):**
 
@@ -494,11 +496,15 @@ curl -H "X-API-Key: YOUR_KEY" \
   "data": {
     "lxc_id": "104",
     "cores": 4,
-    "memory_mb": 8192
+    "memory_mb": 8192,
+    "swap_mb": 512
   },
   "message": "Successfully retrieved configuration for VM 104"
 }
 ```
+
+`cores` and `swap_mb` are `null` when the container config has no such line.
+For `swap_mb` that means "not recorded", which is not the same as `0` (no swap).
 
 ---
 

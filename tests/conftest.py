@@ -77,6 +77,7 @@ DEFAULT_PCT_CONFIG = (
     "arch: amd64\n"
     "cores: 2\n"
     "memory: 2048\n"
+    "swap: 512\n"
     "rootfs: local-lvm:vm-104-disk-0,size=8G\n"
 )
 

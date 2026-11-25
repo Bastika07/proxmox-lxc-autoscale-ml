@@ -22,6 +22,88 @@ def _swap_usage_percent(latest_metrics):
     return max(0.0, min(100.0, used / total * 100))
 
 
+def _swap_usage_mb(latest_metrics):
+    """Swap in use in MB; 0 when unknown, missing or NaN."""
+    try:
+        used = float(latest_metrics.get("swap_usage_mb", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if math.isnan(used) else max(0.0, used)
+
+
+def _optional_mb(value):
+    """An allocation in MB as int, or None when missing or NaN."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(number) else int(number)
+
+
+def determine_swap_limit(latest_metrics, new_ram, config):
+    """
+    Return the swap limit (MB) to set alongside RAM, or None to leave it alone.
+
+    With scaling.manage_swap_limit on, the swap limit follows the RAM limit at
+    a fixed ratio (swap_ratio), clamped to [min_swap_mb, max_swap_mb]. Swap is
+    a buffer, not a resource to grow: pressure on it is answered by scaling RAM
+    up (determine_scaling_action), and this only keeps the buffer proportional.
+
+    It is left alone when:
+      - manage_swap_limit is off (the default);
+      - the container's current swap limit is unknown -- an API too old to
+        report `swap_mb`, or no `swap` line in the container config. Setting it
+        blind could not tell growing from shrinking;
+      - the container has swap 0, which is a deliberate "no swap" choice;
+      - the target equals the current limit.
+
+    A shrink never goes below what is in swap now plus a 25% margin: lowering
+    `memory.swap.max` under current usage does not bring pages back, it only
+    stops further swap-out, so the next squeeze goes straight to the OOM killer.
+
+    Args:
+        latest_metrics: Metrics row with current_ram_mb, current_swap_mb and
+            optionally swap_usage_mb.
+        new_ram: The RAM limit determine_scaling_action chose, or None if RAM
+            stays as it is.
+        config: Configuration with a 'scaling' section.
+    """
+    scaling = config["scaling"]
+    # Read every key unconditionally so each is honoured whichever branch runs.
+    manage = bool(scaling.get("manage_swap_limit", False))
+    ratio = float(scaling.get("swap_ratio", 0.5))
+    min_swap = int(scaling.get("min_swap_mb", 0))
+    max_swap = int(scaling.get("max_swap_mb", 4096))
+
+    if not manage:
+        return None
+
+    current_swap = _optional_mb(latest_metrics.get("current_swap_mb"))
+    current_ram = _optional_mb(latest_metrics.get("current_ram_mb"))
+    if current_swap is None or current_ram is None:
+        logging.debug(
+            "Swap limit not managed for this container: its current swap limit is unknown "
+            "(the API does not report swap_mb, or the container config has no swap line).")
+        return None
+    if current_swap == 0:
+        logging.debug("Swap limit not managed for this container: it has swap 0 (no swap).")
+        return None
+
+    target_ram = new_ram if new_ram is not None else current_ram
+    target = min(max(int(round(ratio * target_ram)), min_swap), max_swap)
+
+    if target < current_swap:
+        floor = math.ceil(_swap_usage_mb(latest_metrics) * 1.25)
+        target = max(target, min(floor, current_swap))
+
+    if target == current_swap:
+        return None
+    logging.debug(f"Swap limit {current_swap} MB -> {target} MB (RAM {target_ram} MB x {ratio}).")
+    return target
+
+
 def determine_scaling_action(latest_metrics, scaling_decision, confidence, config):
     """
     Determine CPU and RAM scaling actions based on usage metrics and thresholds.
@@ -129,6 +211,20 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
         new_ram = min(current_ram + ram_step, thresholds["max_ram_mb"])
     elif ram_action == "Scale Down":
         new_ram = max(current_ram - ram_step, thresholds["min_ram_mb"])
+        # What the container holds is RAM in use PLUS what already sits in
+        # swap. A scale-down is only safe if that total fits the smaller limit
+        # without immediately crossing the scale-up threshold again: otherwise
+        # the kernel has to push the difference into swap (whose limit may be
+        # shrinking at the same time when manage_swap_limit is on) and, if
+        # swap is full, the OOM killer runs. Below the threshold also keeps the
+        # next cycle from scaling straight back up.
+        held_mb = memory_usage_mb + _swap_usage_mb(latest_metrics)
+        if new_ram > 0 and held_mb / new_ram * 100 >= thresholds["ram_scale_up_threshold"]:
+            logging.debug(
+                f"Not scaling RAM down to {new_ram} MB: {held_mb:.0f} MB in RAM and swap "
+                f"would be {held_mb / new_ram * 100:.1f}% of it, at or above "
+                f"ram_scale_up_threshold ({thresholds['ram_scale_up_threshold']}%).")
+            ram_action, new_ram = "No Scaling", None
 
     # A container already at its floor or ceiling clamps to the value it
     # already has. Reporting that as an action made the loop issue a no-op
@@ -152,7 +248,7 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
 
 
 
-def apply_scaling(lxc_id, new_cores, new_ram, config):
+def apply_scaling(lxc_id, new_cores, new_ram, config, new_swap=None, current_ram=None):
     """
     Apply CPU and/or RAM scaling changes to a container via the API.
 
@@ -164,6 +260,11 @@ def apply_scaling(lxc_id, new_cores, new_ram, config):
         new_cores (int): Target CPU cores (None to skip CPU scaling)
         new_ram (int): Target RAM in MB (None to skip RAM scaling)
         config (dict): Configuration containing API settings and retry logic
+        new_swap (int): Target swap limit in MB (None to leave swap alone).
+            Sent in the same /scale/ram request as RAM, which the API turns
+            into one `pct set -memory -swap`.
+        current_ram (int): RAM in MB to send with a swap-only change, where
+            new_ram is None and the endpoint still requires `memory`.
 
     Returns:
         None
@@ -187,7 +288,8 @@ def apply_scaling(lxc_id, new_cores, new_ram, config):
                 response = requests.post(url, json=data, timeout=request_timeout,
                                          headers=headers)
                 response.raise_for_status()
-                logging.info(f"Successfully scaled {resource_type} for LXC ID {lxc_id} to {data[resource_key]} {resource_type} units.")
+                swap_note = f" (swap {data['swap']} MB)" if "swap" in data else ""
+                logging.info(f"Successfully scaled {resource_type} for LXC ID {lxc_id} to {data[resource_key]} {resource_type} units{swap_note}.")
                 return True
             except requests.RequestException as e:
                 # `e.response` is None for connection/timeout errors, where no
@@ -227,7 +329,15 @@ def apply_scaling(lxc_id, new_cores, new_ram, config):
         if not perform_request(cpu_url, payload(cores=new_cores), "CPU"):
             logging.error(f"Scaling operation aborted for LXC ID {lxc_id} due to CPU scaling failure.")
 
-    if new_ram is not None:
+    memory = new_ram if new_ram is not None else (current_ram if new_swap is not None else None)
+    if new_swap is not None and memory is None:
+        logging.error(
+            f"Not changing swap for LXC ID {lxc_id}: its RAM is unknown and /scale/ram requires it.")
+        new_swap = None
+    if memory is not None:
         ram_url = f"{base_url}{ram_endpoint}"
-        if not perform_request(ram_url, payload(memory=new_ram), "RAM"):
+        fields = {"memory": memory}
+        if new_swap is not None:
+            fields["swap"] = new_swap
+        if not perform_request(ram_url, payload(**fields), "RAM"):
             logging.error(f"Scaling operation aborted for LXC ID {lxc_id} due to RAM scaling failure.")

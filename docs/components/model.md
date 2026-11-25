@@ -135,7 +135,29 @@ Swap usage % = swap_usage_mb / swap_total_mb. A container with
 swap_total_mb = 0 (no swap, or monitor enable_swap: false) is
 scaled on RAM alone.
 
+Not scaled DOWN if RAM usage + swap usage would reach
+ram_scale_up_threshold of the smaller RAM limit: what is in RAM
+and swap has to fit, or the kernel pushes it into swap and, with
+swap full, the OOM killer runs.
+
 Step size: ram_scale_step_mb (default 512 MB)
+```
+
+**Swap limit** (off unless `manage_swap_limit: true`):
+
+```
+Target swap limit = swap_ratio x RAM limit (default 0.5),
+clamped to [min_swap_mb, max_swap_mb] (default 0-4096 MB).
+
+Sent with RAM in one /scale/ram request -> one pct set -memory -swap.
+Applied also when RAM is unchanged, so existing containers converge.
+
+Left alone when:
+  - the container has swap 0 (deliberately no swap)
+  - the API does not report swap_mb (too old) or the config has no swap line
+  - the target equals the current limit
+
+A shrink never goes below swap in use x 1.25.
 ```
 
 ### Configuration

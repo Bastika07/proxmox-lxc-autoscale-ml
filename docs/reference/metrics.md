@@ -78,6 +78,10 @@ lxc_autoscale_container_cpu_cores{container_id="104"} 4
 # HELP lxc_autoscale_container_memory_mb Current memory allocated in MB
 # TYPE lxc_autoscale_container_memory_mb gauge
 lxc_autoscale_container_memory_mb{container_id="104"} 4096
+
+# HELP lxc_autoscale_container_swap_mb Current swap limit in MB
+# TYPE lxc_autoscale_container_swap_mb gauge
+lxc_autoscale_container_swap_mb{container_id="104"} 2048
 ```
 
 ## Prometheus scrape configuration
