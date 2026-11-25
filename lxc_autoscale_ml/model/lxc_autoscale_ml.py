@@ -98,9 +98,17 @@ def current_container_ids(df):
     The metrics file keeps `max_metrics_entries` cycles of history and the
     monitor only records running containers, so a container's rows linger long
     after it stops existing.
+
+    The newest snapshot is identified by its position in the file, not by its
+    timestamp: monitors before the shared per-cycle timestamp stamped every
+    container separately, so "rows with the newest timestamp" was always a
+    single container and the rest of the fleet was never evaluated.
     """
-    latest = df["timestamp"].max()
-    return [str(cid) for cid in df[df["timestamp"] == latest]["container_id"].unique()]
+    if "snapshot" in df.columns:
+        latest = df[df["snapshot"] == df["snapshot"].max()]
+    else:
+        latest = df[df["timestamp"] == df["timestamp"].max()]
+    return [str(cid) for cid in latest["container_id"].unique()]
 
 
 def metrics_are_stale(df, config):
@@ -114,7 +122,10 @@ def metrics_are_stale(df, config):
     interval = config.get("interval_seconds", 60)
     max_age = config.get("max_metrics_age_seconds", interval * 3)
     newest = df["timestamp"].max()
-    age = (pd.Timestamp.now() - newest).total_seconds()
+    # load_data normalises timestamps to UTC; a naive "now" here raised
+    # "Cannot subtract tz-naive and tz-aware" on every cycle.
+    now = pd.Timestamp.now(tz="UTC") if newest.tzinfo is not None else pd.Timestamp.now()
+    age = (now - newest).total_seconds()
     if age > max_age:
         logging.error(
             f"Newest metrics sample is {age:.0f}s old (limit {max_age:.0f}s). "
@@ -293,9 +304,16 @@ def evaluate_container(container_id, df, model, features_to_use, container_confi
         return
 
     if dry_run:
+        # The inputs of the decision, so a dry run can be checked by reading
+        # the log rather than re-deriving it from the metrics file.
         logging.info(
             f"[dry_run] Would scale container {container_id}: "
-            f"CPU - {cpu_action} (-> {new_cores}), RAM - {ram_action} (-> {new_ram}){swap_note} "
+            f"CPU - {cpu_action} ({cores} -> {new_cores}), "
+            f"RAM - {ram_action} ({memory_mb} -> {new_ram} MB){swap_note} "
+            f"| CPU {latest_metrics['cpu_usage_percent']:.1f}%, "
+            f"RAM used {latest_metrics['memory_usage_mb']:.0f} MB, "
+            f"swap used {latest_metrics.get('swap_usage_mb', 0):.0f}"
+            f"/{latest_metrics.get('swap_total_mb', 0):.0f} MB "
             f"| Confidence: {confidence:.2f}%"
         )
         return

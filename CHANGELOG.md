@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+Found by a dry run against real metrics; the test fixtures had hidden all of
+them.
+
+- **The model no longer dies on every cycle with "Cannot subtract tz-naive and
+  tz-aware".** The monitor writes UTC timestamps with an offset; the staleness
+  check compared them with a naive local "now". Timestamps are now normalised
+  to UTC on load, and naive ones left by an older monitor are read as local
+  time, so a file holding both still loads.
+- **Every running container is evaluated, not one per cycle.** The monitor
+  stamped each container separately, so "the newest snapshot" contained a
+  single container. The monitor now gives all containers of a cycle one
+  timestamp, and the model identifies the newest snapshot by its position in
+  the file, which also covers files written by the old monitor.
+- **Swap no longer scales RAM up without end.** Swapped pages are not paged
+  back in when RAM is added, so swap usage stayed above
+  `swap_scale_up_threshold` and RAM grew by `ram_scale_step_mb` every cycle up
+  to `max_ram_mb`. Swap now drives a scale-up only while RAM used plus swap
+  used reaches `ram_scale_up_threshold` of the current limit -- the same test
+  the scale-down guard uses -- which ends the series once the swapped pages
+  would fit.
+- **A scale-down no longer raises RAM (or cores) to the configured minimum**,
+  and a scale-up no longer lowers them to the maximum, for containers
+  configured outside the limits by hand.
+- The dry-run log line now shows current and target values, RAM and swap in
+  use, so a dry run can be checked from the log.
+
 ### Added
 
 - **Swap is now a signal for RAM scaling.** A container can swap hard while its

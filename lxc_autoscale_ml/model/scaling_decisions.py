@@ -177,10 +177,33 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
         ram_action = "Scale Up"
         logging.debug(f"Memory usage {memory_usage_percent:.1f}% exceeds the scale-up threshold.")
     elif swap_usage_percent is not None and swap_usage_percent > swap_scale_up_threshold:
-        ram_action = "Scale Up"
-        logging.debug(
-            f"Swap usage {swap_usage_percent:.1f}% exceeds swap_scale_up_threshold "
-            f"({swap_scale_up_threshold}%); scaling RAM up.")
+        # Swap alone is not pressure. The kernel does not page swapped-out
+        # memory back in just because RAM was added, so swap usage stays
+        # where it is after a scale-up -- and scaling on the swap percentage
+        # alone added a step every cycle until max_ram_mb (observed: +512 MB
+        # every 3 minutes up to 16 GB on a container whose RAM was already
+        # sufficient).
+        #
+        # Swap only counts while RAM could not hold what is in swap: RAM in
+        # use plus swap in use must reach ram_scale_up_threshold of the
+        # current limit. That is the same test the scale-down guard below
+        # applies to the smaller limit, so the two cannot oscillate, and each
+        # swap-driven step lowers the ratio, which ends the series once
+        # everything fits -- one or two steps, not a run to the ceiling.
+        held_mb = memory_usage_mb + _swap_usage_mb(latest_metrics)
+        held_percent = held_mb / current_ram_mb * 100 if current_ram_mb > 0 else 0
+        if held_percent >= thresholds["ram_scale_up_threshold"]:
+            ram_action = "Scale Up"
+            logging.debug(
+                f"Swap usage {swap_usage_percent:.1f}% exceeds swap_scale_up_threshold "
+                f"({swap_scale_up_threshold}%) and RAM plus swap in use ({held_mb:.0f} MB, "
+                f"{held_percent:.1f}%) reaches ram_scale_up_threshold; scaling RAM up.")
+        else:
+            logging.debug(
+                f"Swap usage {swap_usage_percent:.1f}% exceeds swap_scale_up_threshold "
+                f"({swap_scale_up_threshold}%), but RAM plus swap in use ({held_mb:.0f} MB) "
+                f"is only {held_percent:.1f}% of the RAM limit: the swapped pages would fit, "
+                f"so more RAM does not help. Not scaling RAM up.")
     elif memory_usage_percent < thresholds["ram_scale_down_threshold"]:
         if swap_usage_percent is not None and swap_usage_percent > swap_block_threshold:
             # Low RAM usage while pages sit in swap is not idle memory: taking
@@ -225,6 +248,24 @@ def determine_scaling_action(latest_metrics, scaling_decision, confidence, confi
                 f"would be {held_mb / new_ram * 100:.1f}% of it, at or above "
                 f"ram_scale_up_threshold ({thresholds['ram_scale_up_threshold']}%).")
             ram_action, new_ram = "No Scaling", None
+
+    # The clamps above can point against the decision for a container that
+    # was configured outside [min, max] by hand: a scale-down raised it to the
+    # floor, a scale-up lowered it to the ceiling. A 512 MB container with
+    # min_ram_mb 1024 was "scaled down" to 1024 MB every cycle. Neither is
+    # what the decision means, so such a container is left as it is.
+    if cpu_action == "Scale Down" and new_cores is not None and new_cores > current_cores \
+            or cpu_action == "Scale Up" and new_cores is not None and new_cores < current_cores:
+        logging.debug(
+            f"CPU {cpu_action.lower()} would move {current_cores} cores the other way "
+            f"(to {new_cores}, the configured limit); no action.")
+        cpu_action, new_cores = "No Scaling", None
+    if ram_action == "Scale Down" and new_ram is not None and new_ram > current_ram \
+            or ram_action == "Scale Up" and new_ram is not None and new_ram < current_ram:
+        logging.debug(
+            f"RAM {ram_action.lower()} would move {current_ram} MB the other way "
+            f"(to {new_ram} MB, the configured limit); no action.")
+        ram_action, new_ram = "No Scaling", None
 
     # A container already at its floor or ceiling clamps to the value it
     # already has. Reporting that as an action made the loop issue a no-op

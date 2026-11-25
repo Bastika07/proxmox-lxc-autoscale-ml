@@ -235,7 +235,7 @@ class TestResilience:
         monkeypatch.setattr(
             lxc_monitor, "get_running_lxc_containers", lambda: ["104", "105"])
 
-        async def collect(container_id, executor):
+        async def collect(container_id, executor, *args):
             if container_id == "104":
                 raise RuntimeError("container is unreachable")
             return container_id, {"cpu_usage_percent": 5.0}
