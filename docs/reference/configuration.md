@@ -405,7 +405,7 @@ state. Gunicorn logs a warning at startup if `workers` is above 1.
 | `model.max_samples` | integer | `64` | Samples drawn per tree |
 | `model.random_state` | integer | `42` | Random seed |
 | `spike_detection.spike_threshold` | integer | `2` | Standard deviations that count as a spike |
-| `spike_detection.rolling_window` | integer | `5` | Window for rolling mean and standard deviation |
+| `spike_detection.rolling_window` | integer | `5` | Window for rolling mean and standard deviation; a spike is judged against the window before the sample |
 | `scaling.max_cpu_cores` | integer | `4` | Ceiling per container |
 | `scaling.min_cpu_cores` | integer | `2` | Floor per container |
 | `scaling.max_ram_mb` | integer | `8192` | Ceiling per container |

@@ -55,17 +55,34 @@ IsolationForest is an unsupervised machine learning algorithm for anomaly detect
 | -1 | Anomaly (unusual resource usage) |
 | 1 | Normal behavior |
 
-### Features Used (26 total)
+### Features Used (33 total)
 
 | Category | Features |
 |----------|----------|
 | CPU | `cpu_usage_percent`, `rolling_mean_cpu`, `rolling_std_cpu`, `cpu_trend`, `max_cpu`, `min_cpu`, `cpu_per_process` |
-| Memory | `memory_usage_mb`, `rolling_mean_memory`, `rolling_std_memory`, `memory_trend`, `max_memory`, `min_memory`, `memory_per_process`, `swap_usage_mb`, `swap_total_mb` |
+| Memory | `memory_usage_mb`, `rolling_mean_memory`, `rolling_std_memory`, `memory_trend`, `max_memory`, `min_memory`, `memory_per_process` |
+| Swap | `swap_usage_mb`, `swap_total_mb`, `swap_usage_percent`, `rolling_mean_swap`, `rolling_std_swap`, `swap_trend` |
+| Spikes | `cpu_spike`, `memory_spike`, `swap_spike` |
 | Combined | `cpu_memory_ratio` |
 | Disk | `filesystem_usage_gb`, `filesystem_free_gb`, `filesystem_total_gb` |
 | Network | `network_rx_bytes`, `network_tx_bytes` |
 | I/O | `io_reads`, `io_writes` |
 | System | `process_count`, `time_diff` |
+
+`swap_usage_percent` is `swap_usage_mb / swap_total_mb * 100`, and the rolling
+mean, standard deviation and trend for swap are computed on that percentage
+rather than on MB. That makes swap pressure comparable across containers with
+different swap sizes: 480 MB of swap is unremarkable on a container with 8 GB
+of swap and a warning sign on one with 512 MB. A container without swap, or a
+monitor running with `enable_swap: false`, reports 0% rather than NaN.
+
+The spike flags are 1 when a sample lies more than `spike_threshold` standard
+deviations from the mean of the `rolling_window` samples before it, and 0
+otherwise. The sample itself is not part of that window: included, it could
+never lie more than 1.79 standard deviations out with a window of 5, so no
+flag ever fired with the shipped settings. A container's first
+`rolling_window` samples are never flagged, and after a perfectly flat stretch
+(for example swap at exactly 0%) any change counts as a spike.
 
 ### Configuration
 

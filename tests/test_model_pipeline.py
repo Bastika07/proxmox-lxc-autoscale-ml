@@ -135,6 +135,157 @@ class TestPreprocessing:
         assert chained == []
 
 
+class TestSpikeDetection:
+    """The spike flags compared a sample with rolling stats that already
+    contained it. In a window of n samples one value lies at most
+    (n-1)/sqrt(n) standard deviations from the mean -- 1.79 for the shipped
+    rolling_window 5 -- so with spike_threshold 2 no flag could ever fire."""
+
+    SHIPPED = {**BASE_CONFIG, "spike_detection": {"spike_threshold": 2, "rolling_window": 5}}
+
+    def frame(self, tmp_path, cpu_values, **overrides):
+        data = [make_snapshot(("104",), i, cycles=len(cpu_values),
+                              cpu_usage_percent=cpu, **overrides)
+                for i, cpu in enumerate(cpu_values)]
+        path = tmp_path / "spike.json"
+        path.write_text(json.dumps(data))
+        return preprocess_data(load_data(str(path)), self.SHIPPED)
+
+    def test_a_jump_fires_with_the_shipped_settings(self, tmp_path):
+        df = self.frame(tmp_path, [40, 41, 40, 42, 41, 40, 41, 95])
+        assert df["cpu_spike"].tolist() == [0, 0, 0, 0, 0, 0, 0, 1]
+
+    def test_ordinary_noise_does_not_fire(self, tmp_path):
+        df = self.frame(tmp_path, [40, 41, 40, 42, 41, 40, 41, 42, 40, 41])
+        assert df["cpu_spike"].sum() == 0
+
+    def test_the_first_samples_are_never_flagged(self, tmp_path):
+        """Not a full window of history to compare with yet; a two- or
+        three-sample standard deviation flagged ordinary noise."""
+        df = self.frame(tmp_path, [40, 41, 40, 42, 95])
+        assert df["cpu_spike"].sum() == 0
+
+    def test_a_flat_history_flags_any_change(self, tmp_path):
+        """Swap sits at exactly 0% for hours; the first MB is a change worth seeing."""
+        data = [make_snapshot(("104",), i, cycles=6, swap_total_mb=512,
+                              swap_usage_mb=0.0 if i < 5 else 50.0) for i in range(6)]
+        path = tmp_path / "flat.json"
+        path.write_text(json.dumps(data))
+        df = preprocess_data(load_data(str(path)), self.SHIPPED)
+        assert df["swap_spike"].tolist() == [0, 0, 0, 0, 0, 1]
+
+    def test_flags_are_per_container(self, tmp_path):
+        data = []
+        for i in range(8):
+            snapshot = make_snapshot(("104", "105"), i, cycles=8, cpu_usage_percent=40.0)
+            if i == 7:
+                snapshot["105"]["cpu_usage_percent"] = 95.0
+            data.append(snapshot)
+        path = tmp_path / "two.json"
+        path.write_text(json.dumps(data))
+        df = preprocess_data(load_data(str(path)), self.SHIPPED)
+        assert df[df["container_id"] == "104"]["cpu_spike"].sum() == 0
+        assert df[df["container_id"] == "105"]["cpu_spike"].iloc[-1] == 1
+
+    def test_the_flags_are_model_features(self, metrics_file):
+        """They were booleans, and the model trains on numeric columns only."""
+        df = preprocess_data(load_data(metrics_file()), BASE_CONFIG)
+        _, features = train_anomaly_models(df, BASE_CONFIG)
+        for column in ["cpu_spike", "memory_spike", "swap_spike"]:
+            assert column in features
+
+
+class TestSwapFeatures:
+    """Swap pressure is a signal the model could not see: only the raw MB
+    columns reached it, which say nothing about how full the swap is."""
+
+    def test_swap_features_are_produced(self, metrics_file):
+        df = preprocess_data(load_data(metrics_file(swap_usage_mb=128, swap_total_mb=512)),
+                             BASE_CONFIG)
+        for column in ["swap_usage_percent", "rolling_mean_swap", "rolling_std_swap",
+                       "swap_spike", "swap_trend"]:
+            assert column in df.columns
+        assert df["swap_usage_percent"].tolist() == pytest.approx([25.0] * len(df))
+
+    def test_no_swap_configured_yields_zero_not_nan(self, metrics_file):
+        """swap_total_mb is 0 when the container has no swap or the monitor
+        runs with enable_swap: false; dividing by it must not produce NaN/inf."""
+        df = preprocess_data(load_data(metrics_file(swap_usage_mb=0, swap_total_mb=0)),
+                             BASE_CONFIG)
+        assert (df["swap_usage_percent"] == 0).all()
+        assert (df["swap_trend"] == 0).all()
+        assert np.isfinite(df.select_dtypes(include=[np.number]).to_numpy()).all()
+
+    def test_metrics_without_swap_keys_still_work(self, tmp_path):
+        """Older metrics files predate the swap columns."""
+        snapshot = make_snapshot(("104",), 0, cycles=1)
+        del snapshot["104"]["swap_usage_mb"], snapshot["104"]["swap_total_mb"]
+        path = tmp_path / "old.json"
+        path.write_text(json.dumps([snapshot]))
+        df = preprocess_data(load_data(str(path)), BASE_CONFIG)
+        assert df is not None
+        assert (df["swap_usage_percent"] == 0).all()
+
+    def test_rising_swap_has_a_positive_trend(self, tmp_path):
+        data = [make_snapshot(("104",), i, swap_usage_mb=50.0 * i, swap_total_mb=512)
+                for i in range(8)]
+        path = tmp_path / "rising.json"
+        path.write_text(json.dumps(data))
+        df = preprocess_data(load_data(str(path)), BASE_CONFIG)
+        assert (df["swap_trend"] > 0).all()
+
+    def test_trend_and_rolling_stats_are_per_container(self, tmp_path):
+        data = []
+        for i in range(8):
+            snapshot = make_snapshot(("104",), i, swap_usage_mb=50.0 * i, swap_total_mb=512)
+            snapshot.update({k: v for k, v in make_snapshot(
+                ("105",), i, swap_usage_mb=10.0, swap_total_mb=512).items() if k == "105"})
+            data.append(snapshot)
+        path = tmp_path / "mixed.json"
+        path.write_text(json.dumps(data))
+        df = preprocess_data(load_data(str(path)), BASE_CONFIG)
+        steady = df[df["container_id"] == "105"]
+        assert (steady["swap_trend"] == 0).all()
+        assert (steady["rolling_std_swap"] == 0).all()
+
+    def test_the_model_trains_on_the_swap_features(self, metrics_file):
+        df = preprocess_data(load_data(metrics_file(swap_usage_mb=64, swap_total_mb=512)),
+                             BASE_CONFIG)
+        _, features = train_anomaly_models(df, BASE_CONFIG)
+        for column in ["swap_usage_percent", "rolling_mean_swap", "rolling_std_swap",
+                       "swap_trend"]:
+            assert column in features
+
+    def test_swap_pressure_is_flagged_as_an_anomaly(self, tmp_path):
+        """The point of the change. Identical CPU and RAM everywhere; 104
+        always uses ~480 MB of its 8 GB swap, 105 suddenly uses the same
+        ~480 MB of its 512 MB. In raw MB nothing looks unusual -- 480 MB of
+        swap is everyday for 104 -- so only the fill level exposes 105."""
+        data = []
+        for i in range(40):
+            snapshot = make_snapshot(("104", "105"), i, cycles=40,
+                                     cpu_usage_percent=40.0, memory_usage_mb=900.0,
+                                     process_count=20)
+            snapshot["104"].update(swap_usage_mb=478.0 + (i % 3), swap_total_mb=8192)
+            snapshot["105"].update(swap_usage_mb=(478.0 + (i % 3)) if i >= 37 else 5.0 + (i % 3),
+                                   swap_total_mb=512)
+            data.append(snapshot)
+        path = tmp_path / "pressure.json"
+        path.write_text(json.dumps(data))
+        # One forest can isolate the jump in raw MB by luck, so judge the
+        # average over several seeds: without the fill-level features the
+        # pressured samples score on the normal side (> 0) on average.
+        scores = []
+        for seed in range(5):
+            config = {**BASE_CONFIG, "model": {**BASE_CONFIG["model"], "n_estimators": 100,
+                                               "max_samples": 64, "random_state": seed}}
+            df = preprocess_data(load_data(str(path)), config)
+            model, features = train_anomaly_models(df, config)
+            pressured = df[df["container_id"] == "105"].iloc[-3:]
+            scores.append(model.decision_function(pressured[features]).mean())
+        assert np.mean(scores) < 0, f"swap pressure scored as normal: {scores}"
+
+
 class TestConfidence:
     """Confidence is the percentile of a sample's distance from the decision
     boundary among the distances seen during training.
