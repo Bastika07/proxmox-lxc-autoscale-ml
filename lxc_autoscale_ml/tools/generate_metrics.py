@@ -101,7 +101,8 @@ def generate_dataset(container_ids, num_entries, interval_seconds, randomness_fa
     Returns:
         list of dict: The generated dataset.
     """
-    base_time = datetime.datetime.now()
+    # Aware UTC, as the real monitor writes them.
+    base_time = datetime.datetime.now(datetime.UTC)
     dataset = []
 
     for _ in range(num_entries):

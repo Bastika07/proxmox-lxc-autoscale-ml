@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues for `Bastika07/proxmox-lxc-autoscale-ml` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues for `Bastika07/proxmox-lxc-autoscale-ml`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

@@ -1,7 +1,7 @@
 """Tests for the ML side: data preparation, prediction and the scaling loop."""
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -33,7 +33,7 @@ def make_snapshot(container_ids, index, cycles=8, **overrides):
     fixture pinned to 2026-01-01 exercises the staleness path instead of the
     scaling path.
     """
-    stamp = datetime.now() - timedelta(seconds=60 * (cycles - 1 - index))
+    stamp = datetime.now(UTC) - timedelta(seconds=60 * (cycles - 1 - index))
     snapshot = {}
     for container_id in container_ids:
         metrics = {
@@ -736,7 +736,7 @@ class TestStaleAndDepartedContainers:
     def test_stale_metrics_stop_the_cycle(self, orchestrator, tmp_path):
         """A wedged monitor used to leave the model scaling on a frozen
         snapshot forever, ratcheting every container toward a limit."""
-        old = datetime.now() - timedelta(hours=6)
+        old = datetime.now(UTC) - timedelta(hours=6)
         data = []
         for i in range(8):
             snap = make_snapshot(("104",), i, cycles=8)
